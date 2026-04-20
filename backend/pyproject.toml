@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "learning-rag-backend"
+version = "1.0.0"
+description = "基于RAG的个性化学习推荐系统后端"
+requires-python = ">=3.10, <3.12"
+dependencies = [
+    # 依赖已在 requirements.txt 中管理，这里仅做元信息声明
+]
+
+[tool.black]
+# Black 代码格式化配置
+line-length = 120
+target-version = ['py311']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # 排除以下目录
+  \.venv
+  | venv
+  | \.git
+  | __pycache__
+  | data
+  | static
+)/
+'''
+
+[tool.ruff]
+# Ruff 代码检查配置
+line-length = 120
+target-version = "py311"
+select = ["E", "F", "W", "I", "N", "UP"]
+ignore = ["E501"]  # 忽略行长度检查（Black会处理）
+
+[tool.ruff.format]
+# Ruff 格式化配置（与Black保持一致）
+quote-style = "double"
+indent-width = 4
+
+[tool.pytest.ini_options]
+# Pytest 测试配置
+testpaths = ["tests"]
+pythonpath = ["."]
