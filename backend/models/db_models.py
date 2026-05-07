@@ -8,8 +8,9 @@
 4. 索引仅加在高频查询字段（如 username、file_md5）
 """
 # ==================== 第三方库导入 ====================
-from sqlalchemy import Column, Integer, String, Text, Float, TIMESTAMP, ForeignKey, Boolean
+from sqlalchemy import Column, Integer, String, Text, Float, TIMESTAMP, ForeignKey, Boolean, Table
 from sqlalchemy.sql import func
+from sqlalchemy.orm import relationship
 
 # ==================== 内部模块导入 ====================
 from db.sqlite_conn import Base
@@ -46,6 +47,11 @@ class SysUser(Base):
     create_time = Column(TIMESTAMP, nullable=False, server_default=func.now(), comment="创建时间，注册时间")
     update_time = Column(TIMESTAMP, nullable=False, server_default=func.now(), onupdate=func.now(), comment="更新时间，信息修改时间")
 
+    # 新增关联
+    exercise_records = relationship("UserExerciseRecord", back_populates="user", cascade="all, delete-orphan")
+    knowledge_mastery = relationship("UserKnowledgeMastery", back_populates="user", cascade="all, delete-orphan")
+    profile = relationship("UserProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
+
 
 class UserProfile(Base):
     """用户画像/学习进度表
@@ -63,6 +69,14 @@ class UserProfile(Base):
     tag_weight = Column(Text, default="{}", comment="标签权重字典，JSON格式：{标签ID: 权重值0-1}，用于个性化推荐")
     create_time = Column(TIMESTAMP, nullable=False, server_default=func.now(), comment="创建时间，用户注册时自动创建")
     update_time = Column(TIMESTAMP, nullable=False, server_default=func.now(), onupdate=func.now(), comment="更新时间，学习数据变化时刷新")
+    total_study_duration = Column(Integer, nullable=False, default=0, comment="总学习时长，单位：秒")
+    finished_points_count = Column(Integer, nullable=False, default=0, comment="已完成知识点数量")
+    average_score = Column(Float, nullable=False, default=0.0, comment="平均练习得分")
+    weak_tags = Column(Text, comment="薄弱知识点标签，JSON格式")
+    strong_tags = Column(Text, comment="优势知识点标签，JSON格式")
+
+    # 新增关联
+    user = relationship("SysUser", back_populates="profile")
 
 
 class UserLearningHistory(Base):
@@ -132,6 +146,7 @@ class KnowledgeDocument(Base):
     存储用户上传的文档信息，是知识点的来源
     防重复设计：通过 file_md5 字段实现，相同文件只存储一份
     审核流程：用户上传 → 待审核 → 管理员审核通过/驳回
+    私有/公开：通过 is_public 字段控制，0=私有，1=公开
     """
     __tablename__ = "knowledge_document"
 
@@ -150,6 +165,12 @@ class KnowledgeDocument(Base):
     audit_remark = Column(String(255), comment="审核备注，审核通过或驳回的原因")
     create_time = Column(TIMESTAMP, nullable=False, server_default=func.now(), comment="创建时间，文档上传时间")
     update_time = Column(TIMESTAMP, nullable=False, server_default=func.now(), onupdate=func.now(), comment="更新时间，文档信息修改或审核状态变化时间")
+    is_public = Column(Integer, nullable=False, default=0, comment="是否公开：0=私有，1=公开")
+    process_status = Column(Integer, nullable=False, default=0, comment="知识点处理状态：0=待处理，1=处理中，2=处理完成，3=处理失败")
+    process_message = Column(String(255), comment="处理状态信息")
+
+    # 新增关联
+    knowledge_points = relationship("KnowledgePoint", back_populates="document", cascade="all, delete-orphan")
 
 
 class KnowledgeTag(Base):
@@ -186,12 +207,25 @@ class KnowledgePoint(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True, comment="知识点ID，主键自增")
     doc_id = Column(Integer, ForeignKey("knowledge_document.id"), nullable=False, comment="所属文档ID，关联knowledge_document表")
+    user_id = Column(Integer, ForeignKey("sys_user.id"), nullable=False, comment="所属用户ID，实现私有库隔离")
     title = Column(String(255), nullable=False, comment="知识点标题，用于展示与检索")
     content = Column(Text, nullable=False, comment="知识点内容，核心文本，用于向量化与展示")
+    key_points = Column(Text, comment="核心要点，JSON数组格式")
     difficulty = Column(String(32), nullable=False, default="中等", comment="难度：简单/中等/困难，用于推荐过滤")
+    pre_knowledge = Column(Text, comment="前置知识，JSON数组格式")
+    common_mistakes = Column(Text, comment="常见错误，JSON数组格式")
+    related_topics = Column(Text, comment="关联知识点，JSON数组格式")
+    chunk_index = Column(Integer, comment="原始文档块索引")
     vector_id = Column(String(255), comment="向量数据库中的ID，关联FAISS向量库，用于语义检索")
     create_time = Column(TIMESTAMP, nullable=False, server_default=func.now(), comment="创建时间，从文档中提取的时间")
     update_time = Column(TIMESTAMP, nullable=False, server_default=func.now(), onupdate=func.now(), comment="更新时间，知识点内容修改时间")
+
+    # 新增关联
+    document = relationship("KnowledgeDocument", back_populates="knowledge_points")
+    user = relationship("SysUser")
+    tags = relationship("KnowledgeTag", secondary="knowledge_point_tag_rel", backref="points")
+    exercises = relationship("Exercise", secondary="exercise_knowledge", back_populates="knowledge_points")
+    user_mastery = relationship("UserKnowledgeMastery", back_populates="knowledge_point", cascade="all, delete-orphan")
 
 
 # ==================== 审核模块模型 ====================
@@ -224,3 +258,169 @@ class RecommendationRecord(Base):
     recommendation_reason = Column(Text, comment="推荐理由，如：基于收藏的相似推荐/热门推荐")
     is_clicked = Column(Integer, default=0, comment="是否点击，1=是，0=否，用于评估推荐效果")
     create_time = Column(TIMESTAMP, nullable=False, server_default=func.now(), comment="推荐时间，系统生成推荐的时间")
+
+
+# ==================== 新增：内容公开申请表 ====================
+class ContentPublicApply(Base):
+    """内容公开申请表
+    记录用户申请将私有内容转为公共内容的完整审核流程
+    状态流转：待审核(0) → 已通过(1)/已驳回(2)
+    """
+    __tablename__ = "content_public_apply"
+
+    id = Column(Integer, primary_key=True, autoincrement=True, comment="申请ID，主键自增")
+    doc_id = Column(Integer, ForeignKey("knowledge_document.id", ondelete="CASCADE"), nullable=False, comment="文档ID")
+    apply_user_id = Column(Integer, ForeignKey("sys_user.id", ondelete="CASCADE"), nullable=False, comment="申请人ID")
+    apply_status = Column(Integer, nullable=False, default=0, comment="申请状态：0=待审核，1=已通过，2=已驳回")
+    apply_remark = Column(String(255), comment="申请理由")
+    audit_user_id = Column(Integer, ForeignKey("sys_user.id"), comment="审核人ID")
+    audit_remark = Column(String(255), comment="审核备注")
+    audit_time = Column(TIMESTAMP, comment="审核时间")
+    create_time = Column(TIMESTAMP, nullable=False, server_default=func.now(), comment="申请时间")
+    update_time = Column(TIMESTAMP, nullable=False, server_default=func.now(), onupdate=func.now(), comment="更新时间")
+
+
+# ==================== 新增：错题记录表 ====================
+class WrongQuestion(Base):
+    """错题记录表
+    记录用户做错的题目和练习记录
+    """
+    __tablename__ = "wrong_question"
+
+    id = Column(Integer, primary_key=True, autoincrement=True, comment="错题ID")
+    user_id = Column(Integer, ForeignKey("sys_user.id", ondelete="CASCADE"), nullable=False, comment="用户ID")
+    point_id = Column(Integer, ForeignKey("knowledge_point.id", ondelete="CASCADE"), nullable=False, comment="知识点ID")
+    question = Column(Text, nullable=False, comment="题目内容")
+    user_answer = Column(Text, comment="用户答案")
+    correct_answer = Column(Text, comment="正确答案")
+    error_reason = Column(String(255), comment="错误原因")
+    master_level = Column(Integer, nullable=False, default=0, comment="掌握程度：0=未掌握，1=部分掌握，2=已掌握")
+    wrong_count = Column(Integer, nullable=False, default=1, comment="错误次数")
+    last_review_time = Column(TIMESTAMP, comment="上次复习时间")
+    next_review_time = Column(TIMESTAMP, comment="下次复习时间（艾宾浩斯遗忘曲线）")
+    create_time = Column(TIMESTAMP, nullable=False, server_default=func.now(), comment="创建时间")
+    update_time = Column(TIMESTAMP, nullable=False, server_default=func.now(), onupdate=func.now(), comment="更新时间")
+
+
+# ==================== 新增：学习进度表 ====================
+class LearningProgress(Base):
+    """学习进度表
+    记录用户对每个知识点的学习进度
+    """
+    __tablename__ = "learning_progress"
+
+    id = Column(Integer, primary_key=True, autoincrement=True, comment="进度ID")
+    user_id = Column(Integer, ForeignKey("sys_user.id", ondelete="CASCADE"), nullable=False, comment="用户ID")
+    point_id = Column(Integer, ForeignKey("knowledge_point.id", ondelete="CASCADE"), nullable=False, comment="知识点ID")
+    progress = Column(Float, nullable=False, default=0.0, comment="学习进度：0-100%")
+    is_finished = Column(Boolean, nullable=False, default=False, comment="是否完成学习")
+    study_duration = Column(Integer, nullable=False, default=0, comment="累计学习时长，单位：秒")
+    last_study_time = Column(TIMESTAMP, comment="上次学习时间")
+    create_time = Column(TIMESTAMP, nullable=False, server_default=func.now(), comment="创建时间")
+    update_time = Column(TIMESTAMP, nullable=False, server_default=func.now(), onupdate=func.now(), comment="更新时间")
+
+
+# ==================== 新增：习题系统模型 ====================
+# 习题-知识点关联表（多对多）
+exercise_knowledge = Table(
+    "exercise_knowledge",
+    Base.metadata,
+    Column("exercise_id", Integer, ForeignKey("exercise.id", ondelete="CASCADE"), primary_key=True),
+    Column("knowledge_point_id", Integer, ForeignKey("knowledge_point.id", ondelete="CASCADE"), primary_key=True),
+    comment="习题-知识点关联表"
+)
+
+
+class Exercise(Base):
+    """习题表
+    存储所有习题信息，支持多种题型
+    权限控制：仅管理员和审核员可添加/编辑/删除
+    """
+    __tablename__ = "exercise"
+
+    id = Column(Integer, primary_key=True, autoincrement=True, comment="习题ID，主键自增")
+    title = Column(String(500), nullable=False, comment="题目内容")
+    type = Column(String(20), nullable=False, comment="题型：single_choice/multiple_choice/fill_blank/essay")
+    difficulty = Column(String(20), default="中等", comment="难度：简单/中等/困难")
+    answer = Column(Text, nullable=False, comment="正确答案")
+    analysis = Column(Text, comment="答案解析")
+    score = Column(Float, default=10.0, comment="题目分值")
+    create_user_id = Column(Integer, ForeignKey("sys_user.id"), comment="创建人ID（管理员/审核员）")
+    create_time = Column(TIMESTAMP, nullable=False, server_default=func.now(), comment="创建时间")
+    update_time = Column(TIMESTAMP, nullable=False, server_default=func.now(), onupdate=func.now(), comment="更新时间")
+
+    # 关联
+    options = relationship("ExerciseOption", back_populates="exercise", cascade="all, delete-orphan")
+    knowledge_points = relationship("KnowledgePoint", secondary="exercise_knowledge", back_populates="exercises")
+    user_records = relationship("UserExerciseRecord", back_populates="exercise", cascade="all, delete-orphan")
+    create_user = relationship("SysUser")
+
+
+class ExerciseOption(Base):
+    """选择题选项表
+    存储单选题和多选题的选项
+    """
+    __tablename__ = "exercise_option"
+
+    id = Column(Integer, primary_key=True, autoincrement=True, comment="选项ID，主键自增")
+    exercise_id = Column(Integer, ForeignKey("exercise.id", ondelete="CASCADE"), comment="所属习题ID")
+    content = Column(String(500), nullable=False, comment="选项内容")
+    is_correct = Column(Boolean, default=False, comment="是否正确选项")
+    order = Column(Integer, comment="选项顺序")
+
+    # 关联
+    exercise = relationship("Exercise", back_populates="options")
+
+    # 🔥 新增：动态生成 option_label（1→A, 2→B...）
+    @property
+    def option_label(self):
+        if self.order:
+            return chr(ord('A') + self.order - 1)
+        return ""
+
+    # 🔥 新增：别名属性，兼容响应模型
+    @property
+    def option_content(self):
+        return self.content
+
+
+class UserExerciseRecord(Base):
+    """用户答题记录表
+    记录用户每次答题的结果
+    """
+    __tablename__ = "user_exercise_record"
+
+    id = Column(Integer, primary_key=True, autoincrement=True, comment="记录ID，主键自增")
+    user_id = Column(Integer, ForeignKey("sys_user.id", ondelete="CASCADE"), nullable=False, comment="用户ID")
+    exercise_id = Column(Integer, ForeignKey("exercise.id", ondelete="CASCADE"), nullable=False, comment="习题ID")
+    user_answer = Column(Text, comment="用户答案")
+    score = Column(Float, comment="得分")
+    is_correct = Column(Boolean, comment="是否答对")
+    feedback = Column(Text, comment="批改评语")
+    answer_time = Column(Integer, comment="答题时长（秒）")
+    create_time = Column(TIMESTAMP, nullable=False, server_default=func.now(), comment="答题时间")
+
+    # 关联
+    user = relationship("SysUser", back_populates="exercise_records")
+    exercise = relationship("Exercise", back_populates="user_records")
+
+
+class UserKnowledgeMastery(Base):
+    """用户知识点掌握度表
+    基于答题结果计算的知识点掌握度
+    """
+    __tablename__ = "user_knowledge_mastery"
+
+    id = Column(Integer, primary_key=True, autoincrement=True, comment="掌握度ID，主键自增")
+    user_id = Column(Integer, ForeignKey("sys_user.id", ondelete="CASCADE"), nullable=False, comment="用户ID")
+    knowledge_point_id = Column(Integer, ForeignKey("knowledge_point.id", ondelete="CASCADE"), nullable=False, comment="知识点ID")
+    mastery_score = Column(Float, default=0.0, comment="掌握度得分（0-100）")
+    level = Column(String(20), default="未掌握", comment="掌握等级：未掌握/初步掌握/熟练掌握/精通")
+    total_questions = Column(Integer, default=0, comment="总答题数")
+    correct_questions = Column(Integer, default=0, comment="答对题数")
+    last_answer_time = Column(TIMESTAMP, comment="最后答题时间")
+    update_time = Column(TIMESTAMP, nullable=False, server_default=func.now(), onupdate=func.now(), comment="更新时间")
+
+    # 关联
+    user = relationship("SysUser", back_populates="knowledge_mastery")
+    knowledge_point = relationship("KnowledgePoint", back_populates="user_mastery")

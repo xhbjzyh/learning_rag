@@ -1,7 +1,7 @@
 {
-  "name": "frontend",
-  "private": true,
-  "version": "0.0.0",
+  "name": "learning-rag-frontend",
+  "version": "1.0.0",
+  "description": "基于RAG的个性化学习推荐系统 - 前端",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,16 +9,17 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "axios": "^1.15.0",
-    "element-plus": "^2.13.7",
-    "markdown-it": "^14.1.1",
-    "pinia": "^3.0.4",
-    "vue": "^3.4.21",
-    "vue-router": "^4.3.0"
+    "vue": "^3.4.0",
+    "vue-router": "^4.2.0",
+    "pinia": "^2.1.0",
+    "axios": "^1.6.0",
+    "element-plus": "^2.5.0",
+    "@element-plus/icons-vue": "^2.3.0",
+    "echarts": "^5.5.0"
   },
   "devDependencies": {
-    "@vitejs/plugin-vue": "^5.0.4",
-    "sass": "^1.99.0",
-    "vite": "^5.2.0"
+    "@vitejs/plugin-vue": "^5.0.0",
+    "vite": "^5.0.0",
+    "sass": "^1.70.0"
   }
 }

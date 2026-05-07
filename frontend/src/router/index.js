@@ -1,93 +1,87 @@
-﻿import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHistory } from 'vue-router'
 import { useUserStore } from '@/store/user'
 
-// 布局组件
-import Layout from '@/components/Layout.vue'
-
-const routes = [
-  // 登录/注册 = 无布局
+// 公共路由
+const publicRoutes = [
   {
     path: '/login',
     name: 'Login',
-    component: () => import('@/pages/Login.vue'),
-    meta: { noAuth: true }
+    component: () => import('@/views/Login.vue'),
+    meta: { title: '登录' }
   },
   {
     path: '/register',
     name: 'Register',
-    component: () => import('@/pages/Register.vue'),
-    meta: { noAuth: true }
-  },
-
-  // 带侧边栏的主布局
-  {
-    path: '/',
-    component: Layout,
-    children: [
-      {
-        path: 'dashboard',
-        name: 'Dashboard',
-        component: () => import('@/pages/Dashboard.vue'),
-        meta: { title: '仪表盘' }
-      },
-      {
-        path: 'chat',
-        name: 'Chat',
-        component: () => import('@/pages/Chat.vue'),
-        meta: { title: 'AI 问答' }
-      },
-      {
-        path: 'knowledge',
-        name: 'Knowledge',
-        component: () => import('@/pages/Knowledge.vue'),
-        meta: { title: '知识库' }
-      },
-      {
-        path: 'personal',
-        name: 'Personal',
-        component: () => import('@/pages/Personal.vue'),
-        meta: { title: '个人中心' }
-      },
-      {
-        path: '',
-        redirect: '/chat'
-      }
-    ]
+    component: () => import('@/views/Register.vue'),
+    meta: { title: '注册' }
   }
 ]
 
+// 角色路由
+import adminRoutes from './admin'
+import auditorRoutes from './auditor'
+import userRoutes from './user'
+
+// 重定向路由
+const redirectRoute = {
+  path: '/redirect',
+  name: 'Redirect',
+  component: () => import('@/views/Redirect.vue'),
+  meta: { requiresAuth: true }
+}
+
+// 默认路由
+const defaultRoute = {
+  path: '/',
+  redirect: '/redirect'
+}
+
+// 404路由
+const notFoundRoute = {
+  path: '/:pathMatch(.*)*',
+  redirect: '/login'
+}
+
 const router = createRouter({
   history: createWebHistory(),
-  routes
+  routes: [
+    ...publicRoutes,
+    redirectRoute,
+    ...adminRoutes,
+    ...auditorRoutes,
+    ...userRoutes,
+    defaultRoute,
+    notFoundRoute
+  ]
 })
 
-// 🔥 修复：路由守卫逻辑
+// 路由守卫
 router.beforeEach((to, from, next) => {
   const userStore = useUserStore()
 
-  // 🔥 关键：初始化用户信息
-  if (!userStore.token) {
-    userStore.initUser()
+  // 设置页面标题
+  if (to.meta.title) {
+    document.title = `${to.meta.title} - 基于RAG的个性化学习推荐系统`
   }
 
-  const isLogin = !!userStore.token
-
-  console.log('路由跳转:', to.path, '是否登录:', isLogin)
-
-  // 无需登录的页面
-  if (to.meta.noAuth) {
-    next()
-    return
-  }
-
-  // 未登录
-  if (!isLogin) {
-    console.log('未登录，跳转到登录页')
+  // 检查是否需要登录
+  if (to.meta.requiresAuth && !userStore.isLoggedIn) {
     next('/login')
     return
   }
 
-  // 正常放行
+  // 如果已登录且访问登录页，跳转到重定向页
+  if (userStore.isLoggedIn && (to.path === '/login' || to.path === '/register')) {
+    next('/redirect')
+    return
+  }
+
+  // 检查角色权限
+  if (to.meta.allowedRoles && !to.meta.allowedRoles.includes(userStore.roleId)) {
+    next('/redirect')
+    return
+  }
+
   next()
 })
 

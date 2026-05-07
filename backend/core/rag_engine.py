@@ -1,194 +1,101 @@
 """
-RAG 核心引擎
-实现：文档加载 → 文本分割 → 向量化存储 → 语义检索 → 大模型问答
-对接 FAISS 向量库、嵌入模型、智谱大模型
+RAG 核心引擎（支持公共/私有知识库切换 + 对话历史）
+对接 VectorStoreManager 实现用户隔离
 """
-# ==================== 标准库导入 ====================
-import os
 from typing import List
-from pathlib import Path
-
-# ==================== 第三方库导入 ====================
-import faiss
-import json
-import numpy as np
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-
-# ==================== 内部模块导入 ====================
-from config.settings import settings
-from core.embedder import embeder
-from core.llm import llm
 from utils.logger import logger
 from utils.response import BusinessErrorCode, BusinessException
-
+from utils.vector_store import VectorStoreManager, get_global_vector_store
+from core.llm import llm
 
 class RAGEngine:
-    """
-    RAG 检索增强生成引擎
-    完整流程：
-    1. 文档分块 → 2. 向量化 → 3. 存入 FAISS → 4. 用户问题检索 → 5. 大模型生成答案
-    """
-
     def __init__(self):
+        # 公共知识库固定 user_0
+        self.public_vector_store = get_global_vector_store()
+        # 当前用户私有库
+        self.private_vector_store = None
+        self.current_user_id = None
+
+    def init_user_store(self, user_id: int):
+        """初始化用户私有向量库"""
+        if self.current_user_id != user_id:
+            self.private_vector_store = VectorStoreManager(user_id)
+            self.current_user_id = user_id
+
+    def get_vector_store(self, user_id: int, kb_type: str = "private"):
+        """获取对应向量库：public=公共(user_0) / private=私有"""
+        if kb_type == "public":
+            return self.public_vector_store
+        self.init_user_store(user_id)
+        return self.private_vector_store
+
+    def search(self, query: str, user_id: int, kb_type: str = "private", top_k: int = 3) -> List[dict]:
+        """检索：支持公共/私有切换"""
+        vs = self.get_vector_store(user_id, kb_type)
+        results = vs.hybrid_search(query, top_k=top_k)
+        return results
+
+    # 🔥 核心修改：添加 history 参数
+    def answer(self, query: str, user_id: int, kb_type: str = "private", history: list = None) -> str:
         """
-        初始化 RAG 引擎
-        1. 加载 FAISS 索引
-        2. 加载文档ID映射表
-        3. 自动创建目录
+        RAG问答：支持公共/私有切换 + 空库兜底 + 对话历史
+        :param query: 用户问题
+        :param user_id: 用户ID
+        :param kb_type: 知识库类型
+        :param history: 对话历史（新增），格式：[{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
+        :return: 回答
         """
-        # 确保向量库目录存在
-        os.makedirs(settings.FAISS_DIR, exist_ok=True)
-
-        # 路径配置
-        self.index_path = settings.FAISS_INDEX_PATH
-        self.doc_map_path = settings.DOC_MAP_PATH
-
-        # FAISS 索引与文档映射
-        self.index = None
-        self.doc_map = {}  # key: 向量ID, value: 知识点内容/标题等
-
-        # 文本分块器
-        self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=500,
-            chunk_overlap=50,
-            separators=["\n\n", "\n", "。", " ", ""],
-            length_function=len
-        )
-
-        # 加载索引
-        self._load_index()
-
-    def _load_index(self):
-        """
-        加载 FAISS 索引和文档映射表
-        不存在则初始化空索引
-        """
-        try:
-            # 加载索引
-            if self.index_path.exists():
-                self.index = faiss.read_index(str(self.index_path))
-                logger.info(f"✅ 加载 FAISS 索引成功，向量数量：{self.index.ntotal}")
-            else:
-                self.index = faiss.IndexFlatL2(settings.EMBEDDING_DIM)
-                logger.info("✅ 初始化空 FAISS 索引")
-
-            # 加载文档映射
-            if self.doc_map_path.exists():
-                with open(self.doc_map_path, "r", encoding="utf-8") as f:
-                    self.doc_map = json.load(f)
-            else:
-                self.doc_map = {}
-
-        except Exception as e:
-            logger.error(f"❌ 加载向量库失败：{str(e)}")
-            raise BusinessException(
-                code=BusinessErrorCode.VECTOR_SEARCH_ERROR,
-                msg="向量库加载失败"
-            )
-
-    def _save_index(self):
-        """保存 FAISS 索引 + 文档映射表"""
-        faiss.write_index(self.index, str(self.index_path))
-        with open(self.doc_map_path, "w", encoding="utf-8") as f:
-            json.dump(self.doc_map, f, ensure_ascii=False, indent=2)
-
-    def add_document(self, doc_id: int, title: str, content: str):
-        """
-        添加单个文档到向量库
-        :param doc_id: 文档ID（来自数据库）
-        :param title: 标题
-        :param content: 文本内容
-        """
-        try:
-            # 1. 文本分块
-            chunks = self.text_splitter.split_text(content)
-            if not chunks:
-                return
-
-            # 2. 向量化
-            vectors = embeder.embed_texts(chunks)
-
-            # 3. 添加到 FAISS
-            self.index.add(vectors)
-
-            # 4. 记录映射
-            for i, chunk in enumerate(chunks):
-                vec_id = len(self.doc_map)
-                self.doc_map[str(vec_id)] = {
-                    "doc_id": doc_id,
-                    "title": title,
-                    "content": chunk
-                }
-
-            # 5. 保存
-            self._save_index()
-            logger.info(f"✅ 文档 {doc_id} 向量化完成，共 {len(chunks)} 块")
-
-        except Exception as e:
-            logger.error(f"❌ 文档向量化失败：{str(e)}")
-            raise BusinessException(
-                code=BusinessErrorCode.VECTOR_SEARCH_ERROR,
-                msg="文档向量化失败"
-            )
-
-    def search(self, query: str, top_k: int = 3) -> List[dict]:
-        """
-        语义检索：根据用户问题检索相关知识点
-        """
-        if self.index.ntotal == 0:
-            raise BusinessException(
-                code=BusinessErrorCode.KNOWLEDGE_EMPTY,
-                msg="知识库暂无内容，请先上传文档"
-            )
-
-        try:
-            # 1. 问题向量化
-            query_vec = embeder.embed_text(query)
-            query_vec = np.expand_dims(query_vec, axis=0)
-
-            # 2. FAISS 检索
-            distances, indices = self.index.search(query_vec, top_k)
-
-            # 3. 组装结果
-            results = []
-            for idx in indices[0]:
-                if str(idx) in self.doc_map:
-                    results.append(self.doc_map[str(idx)])
-
-            return results
-
-        except Exception as e:
-            logger.error(f"❌ 向量检索失败：{str(e)}")
-            raise BusinessException(
-                code=BusinessErrorCode.VECTOR_SEARCH_ERROR,
-                msg="向量检索失败"
-            )
-
-    def answer(self, query: str) -> str:
-        """
-        RAG 问答主接口
-        检索 + 提示词 + 大模型生成
-        """
-        # 1. 检索相关知识
-        docs = self.search(query)
-        if not docs:
-            return "未找到相关知识，请尝试更换问题。"
+        # 1. 检索
+        docs = self.search(query, user_id, kb_type, top_k=3)
 
         # 2. 拼接上下文
-        context = "\n---\n".join([d["content"] for d in docs])
+        context_text = "\n".join([f"- {item['content']}" for item in docs]) if docs else ""
 
-        # 3. 系统提示词
-        system_prompt = f"""
-你是一个专业的学习助手，请根据下面提供的知识库内容回答用户问题。
-只使用提供的知识，不编造内容。
+        # 3. 🔥 构建包含历史对话的提示词
+        if history and len(history) > 0:
+            # 有历史对话的情况
+            system_prompt = f"""
+你是专业学习助手，基于知识点和对话历史回答问题，不编造。
+参考知识点：
+{context_text if context_text else '（无相关知识点）'}
 
-知识库内容：
-{context}
+规则：
+1. 参考之前的对话历史，保持对话连贯性
+2. 如果有知识点，基于知识点回答；如果没有，直接回答
+3. 分点作答、专业清晰
 """
+            # 🔥 将历史对话转换为字符串格式
+            history_text = "\n".join([
+                f"{'用户' if item['role'] == 'user' else '助手'}：{item['content']}"
+                for item in history
+            ])
 
-        # 4. 调用大模型
-        return llm.chat(user_prompt=query, system_prompt=system_prompt)
+            # 构建完整的 user_prompt
+            full_user_prompt = f"""
+对话历史：
+{history_text}
 
+当前问题：{query}
+"""
+        else:
+            # 没有历史对话的情况（保持原有逻辑）
+            if not docs:
+                logger.warning(f"{kb_type}知识库为空，使用纯大模型兜底")
+                return llm.chat(
+                    user_prompt=query,
+                    system_prompt="你是专业学习助手，直接回答用户问题"
+                )
 
-# ==================== 全局单例 ====================
+            system_prompt = f"""
+你是专业学习助手，基于知识点回答问题，不编造。
+参考知识点：
+{context_text}
+规则：分点作答、专业清晰
+"""
+            full_user_prompt = query
+
+        # 4. 生成回答
+        return llm.chat(user_prompt=full_user_prompt, system_prompt=system_prompt)
+
+# 全局单例
 rag_engine = RAGEngine()
