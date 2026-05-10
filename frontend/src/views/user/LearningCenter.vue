@@ -2,366 +2,387 @@
   <div class="learning-center">
     <h2 class="page-title">学习中心</h2>
 
-    <el-tabs v-model="activeTab" type="border-card">
-      <!-- 习题练习 -->
-      <el-tab-pane label="习题练习" name="exercise">
-        <div class="exercise-header">
-          <el-input
-            v-model="searchKeyword"
-            placeholder="搜索习题..."
-            style="width: 300px"
-            clearable
-          />
-        </div>
+    <!-- 顶部搜索栏 -->
+    <div class="search-bar">
+      <el-input
+        v-model="searchKeyword"
+        placeholder="搜索课程..."
+        style="width: 400px"
+        clearable
+        @keyup.enter="handleSearch"
+      >
+        <template #append>
+          <el-button :icon="Search" @click="handleSearch" />
+        </template>
+      </el-input>
+    </div>
 
-        <div class="exercise-list">
-          <div v-if="exerciseList.length === 0" class="empty-data">暂无习题</div>
-          <el-card
-            v-for="exercise in exerciseList"
-            :key="exercise.id"
-            class="exercise-card"
-            shadow="hover"
+    <!-- 三级分类筛选栏 -->
+    <div class="category-filter">
+      <div class="filter-row">
+        <span class="filter-label">课程分类：</span>
+        <div class="filter-options">
+          <el-tag
+            v-for="cat in level1Categories"
+            :key="cat.id"
+            :type="selectedLevel1 === cat.id ? 'primary' : 'info'"
+            class="filter-tag"
+            @click="selectLevel1Category(cat)"
           >
-            <div class="exercise-title">
-              <span class="title-text">{{ exercise.title }}</span>
-              <el-tag :type="getDifficultyTag(exercise.difficulty)" size="small">
-                {{ exercise.difficulty }}
-              </el-tag>
-            </div>
-            <div class="exercise-options">
-              <div v-for="(opt, index) in exercise.options" :key="opt.id" class="option-item">
-                <span class="option-label">{{ String.fromCharCode(65 + index) }}.</span>
-                <span class="option-content">{{ opt.option_content }}</span>
-              </div>
-            </div>
-            <div class="footer">
-              <el-button type="primary" @click="openExerciseDialog(exercise)">
-                开始答题
-              </el-button>
-            </div>
-          </el-card>
-        </div>
-
-        <el-pagination
-          v-model:current-page="exercisePage"
-          v-model:page-size="exerciseSize"
-          :total="exerciseTotal"
-          layout="prev, pager, next, jumper, ->, total"
-          @change="loadExerciseList"
-          class="pagination"
-        />
-      </el-tab-pane>
-
-      <!-- 答题记录 -->
-      <el-tab-pane label="我的答题记录" name="records">
-        <div v-if="answerRecords.length === 0" class="empty-data">暂无答题记录</div>
-        <el-table v-else :data="answerRecords" border stripe>
-          <el-table-column label="习题题目" prop="exercise_title" min-width="300" />
-          <el-table-column label="我的答案" prop="user_answer" />
-          <el-table-column label="正确答案" prop="correct_answer" />
-          <el-table-column label="是否正确" prop="is_correct">
-            <template #default="{ row }">
-              <el-tag :type="row.is_correct ? 'success' : 'danger'">
-                {{ row.is_correct ? '正确' : '错误' }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="答题时间" prop="create_time" />
-        </el-table>
-        <el-pagination
-          v-model:current-page="recordPage"
-          v-model:page-size="recordSize"
-          :total="recordTotal"
-          layout="prev, pager, next, jumper, ->, total"
-          @change="loadAnswerRecords"
-        />
-      </el-tab-pane>
-
-      <!-- 错题本 -->
-      <el-tab-pane label="我的错题本" name="wrong">
-        <div v-if="wrongQuestions.length === 0" class="empty-data">暂无错题记录</div>
-        <el-table v-else :data="wrongQuestions" border stripe>
-          <el-table-column label="习题题目" prop="exercise_title" min-width="300" />
-          <el-table-column label="我的答案" prop="user_answer" />
-          <el-table-column label="正确答案" prop="correct_answer" />
-          <el-table-column label="错题时间" prop="create_time" />
-          <el-table-column label="操作">
-            <template #default="{ row }">
-              <el-button type="success" size="small" @click="markMastered(row.id)">已掌握</el-button>
-              <el-button type="danger" size="small" @click="removeWrong(row.id)">移除</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-        <el-pagination
-          v-model:current-page="wrongPage"
-          v-model:page-size="wrongSize"
-          :total="wrongTotal"
-          layout="prev, pager, next, jumper, ->, total"
-          @change="loadWrongQuestions"
-        />
-      </el-tab-pane>
-    </el-tabs>
-
-    <!-- 答题弹窗 -->
-    <el-dialog v-model="exerciseDialogVisible" title="习题答题" width="600px" :close-on-click-modal="false">
-      <div v-if="currentExercise" class="exercise-dialog-content">
-        <div class="dialog-title">
-          <h3>{{ currentExercise.title }}</h3>
-          <el-tag :type="getDifficultyTag(currentExercise.difficulty)" size="small">{{ currentExercise.difficulty }}</el-tag>
-        </div>
-
-        <el-radio-group v-model="selectedAnswer" class="dialog-options">
-          <el-radio v-for="(opt, index) in currentExercise.options" :key="opt.id" :label="opt.option_label">
-            {{ opt.option_label }}. {{ opt.option_content }}
-          </el-radio>
-        </el-radio-group>
-
-        <div v-if="submitResult" class="submit-result">
-          <el-alert :type="submitResult.is_correct ? 'success' : 'error'" :title="submitResult.is_correct ? '回答正确！' : '回答错误'" show-icon />
-          <div class="result-detail">
-            <p><strong>你的答案：</strong>{{ selectedAnswer }}</p>
-            <p><strong>正确答案：</strong>{{ correctAnswer }}</p>
-            <p><strong>解析：</strong>{{ currentExercise.analysis }}</p>
-          </div>
+            {{ cat.name }}
+          </el-tag>
         </div>
       </div>
 
-      <template #footer>
-        <div class="dialog-footer">
-          <el-button @click="closeDialog">关闭</el-button>
-          <el-button type="primary" @click="submitExercise" :disabled="!selectedAnswer || submitResult">提交答案</el-button>
+      <div v-if="level2Categories.length > 0" class="filter-row">
+        <span class="filter-label">二级分类：</span>
+        <div class="filter-options">
+          <el-tag
+            v-for="cat in level2Categories"
+            :key="cat.id"
+            :type="selectedLevel2 === cat.id ? 'primary' : 'info'"
+            class="filter-tag"
+            @click="selectLevel2Category(cat)"
+          >
+            {{ cat.name }}
+          </el-tag>
         </div>
-      </template>
-    </el-dialog>
+      </div>
+
+      <div v-if="level3Categories.length > 0" class="filter-row">
+        <span class="filter-label">三级分类：</span>
+        <div class="filter-options">
+          <el-tag
+            v-for="cat in level3Categories"
+            :key="cat.id"
+            :type="selectedLevel3 === cat.id ? 'primary' : 'info'"
+            class="filter-tag"
+            @click="selectLevel3Category(cat)"
+          >
+            {{ cat.name }}
+          </el-tag>
+        </div>
+      </div>
+    </div>
+
+    <!-- 课程卡片列表 -->
+    <div class="course-list">
+      <div v-if="courseList.length === 0 && !loading" class="empty-data">
+        <el-empty description="暂无课程" />
+      </div>
+
+      <el-skeleton v-if="loading" :rows="3" animated />
+
+      <el-card
+        v-else
+        v-for="course in courseList"
+        :key="course.id"
+        class="course-card"
+        shadow="hover"
+        @click="goToCourseDetail(course.id)"
+      >
+        <div class="card-content">
+          <div class="card-cover">
+            <img :src="course.cover_url || defaultCover" :alt="course.title" />
+          </div>
+          <div class="card-info">
+            <h3 class="card-title">{{ course.title }}</h3>
+            <p class="card-desc">{{ course.description || '暂无简介' }}</p>
+            <div class="card-meta">
+              <span class="meta-item">
+                <el-icon><User /></el-icon>
+                {{ course.lecturer || '未知讲师' }}
+              </span>
+              <span class="meta-item">
+                <el-icon><View /></el-icon>
+                {{ course.view_count }} 次学习
+              </span>
+            </div>
+          </div>
+        </div>
+      </el-card>
+    </div>
+
+    <!-- 分页 -->
+    <el-pagination
+      v-model:current-page="currentPage"
+      v-model:page-size="pageSize"
+      :total="total"
+      :page-sizes="[10, 20, 40]"
+      layout="total, sizes, prev, pager, next, jumper"
+      @current-change="loadCourseList"
+      @size-change="handleSizeChange"
+      class="pagination"
+    />
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, watch, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import learningCenterApi from '@/api/user/learningCenter.js'
+import { Search, User, View } from '@element-plus/icons-vue'
+import courseApi from '@/api/user/course.js'
 
-const activeTab = ref('exercise')
+const router = useRouter()
 
-// 习题
-const exerciseList = ref([])
-const exercisePage = ref(1)
-const exerciseSize = ref(10)
-const exerciseTotal = ref(0)
+// 默认封面
+const defaultCover = 'https://via.placeholder.com/300x200?text=课程封面'
+
+// 搜索
 const searchKeyword = ref('')
 
-// 答题记录
-const answerRecords = ref([])
-const recordPage = ref(1)
-const recordSize = ref(10)
-const recordTotal = ref(0)
+// 分类
+const allCategories = ref([])
+const selectedLevel1 = ref(null)
+const selectedLevel2 = ref(null)
+const selectedLevel3 = ref(null)
 
-// 错题本
-const wrongQuestions = ref([])
-const wrongPage = ref(1)
-const wrongSize = ref(10)
-const wrongTotal = ref(0)
+// 课程列表
+const courseList = ref([])
+const loading = ref(false)
+const currentPage = ref(1)
+const pageSize = ref(12)
+const total = ref(0)
 
-// 弹窗
-const exerciseDialogVisible = ref(false)
-const currentExercise = ref(null)
-const selectedAnswer = ref('')
-const submitResult = ref(null)
-
-// ==============================================
-// 动态计算正确答案
-// ==============================================
-const correctAnswer = computed(() => {
-  if (!currentExercise.value?.options) return ''
-  const correct = currentExercise.value.options.find(item => item.is_correct)
-  return correct ? correct.option_label : ''
+// 计算属性：一级分类
+const level1Categories = computed(() => {
+  return allCategories.value.filter(cat => cat.level === 1)
 })
 
-// ==============================================
-// 核心：补全缺失的「开始答题」函数
-// ==============================================
-const openExerciseDialog = async (exercise) => {
+// 计算属性：二级分类
+const level2Categories = computed(() => {
+  if (!selectedLevel1.value) return []
+  const level1 = allCategories.value.find(cat => cat.id === selectedLevel1.value)
+  return level1?.children || []
+})
+
+// 计算属性：三级分类
+const level3Categories = computed(() => {
+  if (!selectedLevel2.value) return []
+  const level2 = allCategories.value.find(cat => cat.id === selectedLevel2.value)
+  return level2?.children || []
+})
+
+// 加载分类
+const loadCategories = async () => {
   try {
-    // 重置状态
-    selectedAnswer.value = ''
-    submitResult.value = null
-    // 直接使用列表数据
-    currentExercise.value = exercise
-    // 打开弹窗
-    exerciseDialogVisible.value = true
-  } catch (error) {
-    ElMessage.error('加载习题失败')
-  }
-}
-
-// 关闭弹窗重置状态
-const closeDialog = () => {
-  exerciseDialogVisible.value = false
-  selectedAnswer.value = ''
-  submitResult.value = null
-}
-
-// ==============================================
-// 统一数据解析函数（修复核心问题）
-// ==============================================
-const parseResponse = (res) => {
-  // 兼容两种格式：
-  // 1. 标准格式：{ code: 0, data: { list: [], total: 0 } }
-  // 2. 裸数据格式：{ list: [], total: 0 }
-  if (res && res.code === 0 && res.data) return res.data
-  if (res && res.list !== undefined) return res
-  return { list: [], total: 0 }
-}
-
-// ==============================================
-// 加载习题列表
-// ==============================================
-const loadExerciseList = async () => {
-  try {
-    const res = await learningCenterApi.getExerciseList({
-      page: exercisePage.value,
-      size: exerciseSize.value,
-      keyword: searchKeyword.value
-    })
-    const data = parseResponse(res)
-    exerciseList.value = data.list || []
-    exerciseTotal.value = data.total || 0
-    console.log('习题列表加载成功:', data)
-  } catch (error) {
-    console.error('加载习题失败:', error)
-    ElMessage.error('加载习题失败')
-    exerciseList.value = []
-    exerciseTotal.value = 0
-  }
-}
-
-// ==============================================
-// 加载答题记录（修复核心问题）
-// ==============================================
-const loadAnswerRecords = async () => {
-  try {
-    console.log('开始加载答题记录...')
-    const res = await learningCenterApi.getAnswerRecords({
-      page: recordPage.value,
-      size: recordSize.value
-    })
-    const data = parseResponse(res)
-    answerRecords.value = data.list || []
-    recordTotal.value = data.total || 0
-    console.log('答题记录加载成功:', data)
-  } catch (error) {
-    console.error('加载答题记录失败:', error)
-    ElMessage.error('加载答题记录失败')
-    answerRecords.value = []
-    recordTotal.value = 0
-  }
-}
-
-// ==============================================
-// 加载错题本（修复核心问题）
-// ==============================================
-const loadWrongQuestions = async () => {
-  try {
-    console.log('开始加载错题本...')
-    const res = await learningCenterApi.getWrongQuestions({
-      page: wrongPage.value,
-      size: wrongSize.value
-    })
-    const data = parseResponse(res)
-    wrongQuestions.value = data.list || []
-    wrongTotal.value = data.total || 0
-    console.log('错题本加载成功:', data)
-  } catch (error) {
-    console.error('加载错题本失败:', error)
-    ElMessage.error('加载错题本失败')
-    wrongQuestions.value = []
-    wrongTotal.value = 0
-  }
-}
-
-// ==============================================
-// 提交答案（修复核心问题）
-// ==============================================
-const submitExercise = async () => {
-  if (!selectedAnswer.value) {
-    ElMessage.warning('请选择答案')
-    return
-  }
-  try {
-    // 1. 动态判断对错
-    const isCorrect = correctAnswer.value === selectedAnswer.value
-    // 2. 提交后端（包含完整参数）
-    const submitData = {
-      exercise_id: currentExercise.value.id,
-      user_answer: selectedAnswer.value,
-      answer_time: Date.now()// 修复：添加答题时间参数
+    const res = await courseApi.getCategories()
+    if (res && res.code === 0) {
+      allCategories.value = res.data
     }
-    console.log('提交答案:', submitData)
-    const res = await learningCenterApi.submitAnswer(submitData)
-    const data = parseResponse(res)
-    console.log('提交成功:', data)
-
-    // 3. 赋值结果
-    submitResult.value = { is_correct: isCorrect }
-    ElMessage.success(isCorrect ? '回答正确！' : '回答错误')
-
-    // 4. 强制刷新记录（修复：添加延迟确保数据同步）
-    setTimeout(() => {
-      loadAnswerRecords()
-      loadWrongQuestions()
-    }, 300)
   } catch (error) {
-    console.error('提交失败:', error)
-    ElMessage.error('提交失败')
+    console.error('加载分类失败:', error)
   }
 }
 
-// 工具函数
-const markMastered = async (id) => {
+// 加载课程列表
+const loadCourseList = async () => {
+  loading.value = true
   try {
-    console.log('标记已掌握:', id)
-    const res = await learningCenterApi.markMastered(id)
-    const data = parseResponse(res)
-    ElMessage.success('操作成功')
-    loadWrongQuestions()
-  } catch (e) {
-    console.error('标记失败:', e)
-    ElMessage.error('操作失败')
+    const categoryId = selectedLevel3.value || selectedLevel2.value || selectedLevel1.value
+    const res = await courseApi.getCourseList({
+      category_id: categoryId,
+      keyword: searchKeyword.value,
+      page: currentPage.value,
+      page_size: pageSize.value
+    })
+    if (res && res.code === 0) {
+      courseList.value = res.data.list
+      total.value = res.data.total
+    }
+  } catch (error) {
+    console.error('加载课程列表失败:', error)
+    ElMessage.error('加载课程列表失败')
+  } finally {
+    loading.value = false
   }
-}
-const removeWrong = async (id) => {
-  try {
-    console.log('移除错题:', id)
-    const res = await learningCenterApi.removeWrongQuestion(id)
-    const data = parseResponse(res)
-    ElMessage.success('移除成功')
-    loadWrongQuestions()
-  } catch (e) {
-    console.error('移除失败:', e)
-    ElMessage.error('移除失败')
-  }
-}
-const getDifficultyTag = (d) => {
-  const map = { 简单: 'success', 中等: 'warning', 困难: 'danger' }
-  return map[d] || 'info'
 }
 
-watch(searchKeyword, () => { exercisePage.value = 1; loadExerciseList() })
+// 选择一级分类
+const selectLevel1Category = (cat) => {
+  selectedLevel1.value = selectedLevel1.value === cat.id ? null : cat.id
+  selectedLevel2.value = null
+  selectedLevel3.value = null
+  currentPage.value = 1
+  loadCourseList()
+}
+
+// 选择二级分类
+const selectLevel2Category = (cat) => {
+  selectedLevel2.value = selectedLevel2.value === cat.id ? null : cat.id
+  selectedLevel3.value = null
+  currentPage.value = 1
+  loadCourseList()
+}
+
+// 选择三级分类
+const selectLevel3Category = (cat) => {
+  selectedLevel3.value = selectedLevel3.value === cat.id ? null : cat.id
+  currentPage.value = 1
+  loadCourseList()
+}
+
+// 搜索
+const handleSearch = () => {
+  currentPage.value = 1
+  loadCourseList()
+}
+
+// 分页大小变化
+const handleSizeChange = (val) => {
+  pageSize.value = val
+  currentPage.value = 1
+  loadCourseList()
+}
+
+// 跳转到课程详情
+const goToCourseDetail = (courseId) => {
+  router.push(`/user/course/${courseId}`)
+}
+
 onMounted(() => {
-  console.log('页面初始化，加载所有数据...')
-  loadExerciseList()
-  loadAnswerRecords()
-  loadWrongQuestions()
+  loadCategories()
+  loadCourseList()
 })
 </script>
 
 <style scoped>
-.page-title { margin: 0 0 20px; font-size: 20px; }
-.exercise-header { margin-bottom: 20px; }
-.exercise-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); gap: 20px; margin-bottom: 20px; }
-.exercise-card { height: 100%; }
-.exercise-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
-.empty-data { text-align: center; padding: 40px 0; color: #999; }
-.pagination { text-align: center; margin: 20px 0; }
-.dialog-footer { display: flex; justify-content: flex-end; gap: 10px; }
+.learning-center {
+  padding: 20px;
+}
+
+.page-title {
+  margin: 0 0 24px;
+  font-size: 24px;
+  font-weight: 600;
+  color: #333;
+}
+
+.search-bar {
+  margin-bottom: 24px;
+}
+
+.category-filter {
+  background: #f5f7fa;
+  padding: 20px;
+  border-radius: 8px;
+  margin-bottom: 24px;
+}
+
+.filter-row {
+  display: flex;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+
+.filter-row:last-child {
+  margin-bottom: 0;
+}
+
+.filter-label {
+  font-size: 14px;
+  color: #666;
+  width: 80px;
+  flex-shrink: 0;
+  padding-top: 4px;
+}
+
+.filter-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.filter-tag {
+  cursor: pointer;
+  transition: all 0.3s;
+}
+
+.filter-tag:hover {
+  transform: translateY(-1px);
+}
+
+.course-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 24px;
+  margin-bottom: 32px;
+}
+
+.course-card {
+  cursor: pointer;
+  transition: all 0.3s;
+}
+
+.course-card:hover {
+  transform: translateY(-4px);
+}
+
+.card-content {
+  display: flex;
+  flex-direction: column;
+}
+
+.card-cover {
+  width: 100%;
+  height: 180px;
+  overflow: hidden;
+  border-radius: 4px;
+  margin-bottom: 16px;
+}
+
+.card-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.card-info {
+  flex: 1;
+}
+
+.card-title {
+  margin: 0 0 8px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #333;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-desc {
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: #666;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.card-meta {
+  display: flex;
+  gap: 16px;
+  font-size: 13px;
+  color: #999;
+}
+
+.meta-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.empty-data {
+  grid-column: 1 / -1;
+  padding: 60px 0;
+}
+
+.pagination {
+  display: flex;
+  justify-content: center;
+}
 </style>

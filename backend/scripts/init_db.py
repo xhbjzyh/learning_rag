@@ -19,12 +19,32 @@ import sys
 import os
 
 # ==================== 内部模块导入 ====================
-# 添加项目根目录到Python路径，解决脚本独立运行时的模块导入问题
-# 原理：获取当前文件(init_db.py)的父目录的父目录，即项目根目录
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from db.sqlite_conn import engine, Base, SessionLocal
-from models.db_models import SysRole, SysUser, KnowledgeTag  # 新增：导入KnowledgeTag模型
+# 🔥 关键：显式导入【所有课程模型】，强制加载到Base.metadata
+from models.db_models import (
+    # 用户模块
+    SysRole, SysUser, UserProfile, UserLearningHistory,
+    UserLearningRecord, UserFeedback,
+    # 知识库模块
+    KnowledgeCategory, KnowledgeDocument, KnowledgeTag,
+    KnowledgePointTagRel, KnowledgePoint,
+    # 审核&内容模块
+    AuditRecord, ContentPublicApply, WrongQuestion, LearningProgress,
+    # 习题系统
+    Exercise, ExerciseOption, UserExerciseRecord, UserKnowledgeMastery,
+    # 问答记录
+    UserQaRecord,
+    # 推荐基础表
+    RecommendationRecord,
+    # ✅ 课程系统全部表（核心修复，必须显式列出）
+    CourseCategory, Course, CourseKnowledgeRel, CourseResource,
+    UserCourseProgress, UserResourceProgress,
+    # ✅ 课程推荐系统表
+    UserCourseBehavior, CourseTag, CourseTagRel, UserInterestTag,
+    UserLearningPreference, UserSimilarity, CourseSimilarity
+)
 from utils.password_utils import hash_password
 from utils.logger import logger
 

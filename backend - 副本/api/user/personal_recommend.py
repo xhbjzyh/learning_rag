@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from db.sqlite_conn import get_db
 from middleware.auth_middleware import get_current_user
 from models.db_models import SysUser
-from service.user.personal_recommend_service import personal_recommend_service
+from service.user.recommendation_service import personal_recommend_service
 from utils.response import success_response, ApiResponse
 
 router = APIRouter(

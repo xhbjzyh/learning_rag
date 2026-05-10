@@ -28,7 +28,7 @@ async def rag_answer(
 
         # 个性化推荐
         try:
-            from service.user.personal_recommend_service import personal_recommend_service
+            from service.user.recommendation_service import personal_recommend_service
             recommendations = {
                 "knowledge_points": personal_recommend_service.get_related_points(query, current_user.id, db, 3),
                 "exercises": personal_recommend_service.get_related_exercises(query, current_user.id, db, 2)

@@ -16,7 +16,7 @@
       text-color="#bfcbd9"
       active-text-color="#409EFF"
     >
-      <!-- 根据角色显示不同菜单 -->
+      <!-- 超级管理员菜单 -->
       <template v-if="isSuperAdmin">
         <el-menu-item index="/admin/dashboard">
           <el-icon><DataAnalysis /></el-icon>
@@ -34,6 +34,10 @@
           <el-icon><Document /></el-icon>
           <template #title>内容管理</template>
         </el-menu-item>
+        <el-menu-item index="/admin/course-manage">
+          <el-icon><Notebook /></el-icon>
+          <template #title>课程管理</template>
+        </el-menu-item>
         <el-menu-item index="/admin/audit-manage">
           <el-icon><Check /></el-icon>
           <template #title>审核管理</template>
@@ -44,13 +48,15 @@
         </el-menu-item>
       </template>
 
+      <!-- 审核员菜单 -->
       <template v-else-if="isAuditor">
         <el-menu-item index="/auditor/dashboard">
           <el-icon><DataAnalysis /></el-icon>
           <template #title>仪表盘</template>
         </el-menu-item>
+        <!-- 🔥 用100%存在的 List 图标，避免报错 -->
         <el-menu-item index="/auditor/audit-workbench">
-          <el-icon><ListCheck /></el-icon>
+          <el-icon><List /></el-icon>
           <template #title>审核工作台</template>
         </el-menu-item>
         <el-menu-item index="/auditor/public-content">
@@ -59,6 +65,7 @@
         </el-menu-item>
       </template>
 
+      <!-- 普通用户菜单 -->
       <template v-else>
         <el-menu-item index="/user/dashboard">
           <el-icon><DataAnalysis /></el-icon>
@@ -67,10 +74,6 @@
         <el-menu-item index="/user/rag-chat">
           <el-icon><ChatDotRound /></el-icon>
           <template #title>RAG问答</template>
-        </el-menu-item>
-        <el-menu-item index="/user/private-knowledge">
-          <el-icon><Folder /></el-icon>
-          <template #title>私有知识库</template>
         </el-menu-item>
         <el-menu-item index="/user/public-content">
           <el-icon><Document /></el-icon>
@@ -99,9 +102,10 @@ import { useRoute } from 'vue-router'
 import { useAppStore } from '@/store/app'
 import { useUserStore } from '@/store/user'
 import { isSuperAdmin as checkIsSuperAdmin, isAuditor as checkIsAuditor } from '@/utils/auth'
+// 🔥 导入所有100%存在的图标，删掉所有错误图标
 import {
-  DataAnalysis, User, UserFilled, Document, List, Setting,
-  ChatDotRound, Folder, Notebook, MagicStick
+  DataAnalysis, User, UserFilled, Document, List, Check, Setting,
+  ChatDotRound, Notebook, MagicStick
 } from '@element-plus/icons-vue'
 
 const route = useRoute()

@@ -33,6 +33,23 @@ export default [
         meta: { title: '内容全局管理' }
       },
       {
+        path: 'course-manage',
+        name: 'CourseManage',
+        component: () => import('@/views/admin/CourseManage.vue'),
+        meta: { title: '课程管理' }
+      },
+      // ✅ 课程详情路由（标准嵌套，无任何错误）
+      {
+        path: 'course-detail/:id',
+        name: 'CourseDetail',
+        component: () => import('@/views/admin/CourseDetail.vue'),
+        meta: {
+          title: '课程详情',
+          allowedRoles: [1],
+          requiresAuth: true
+        }
+      },
+      {
         path: 'audit-manage',
         name: 'AuditManage',
         component: () => import('@/views/admin/AuditManage.vue'),

@@ -24,7 +24,8 @@ from core.rag_engine import rag_engine
 
 # ==================== 数据库自动建表 + 初始化管理员 ====================
 from db.sqlite_conn import engine, Base
-import models.db_models
+# ✅ 修正：注释掉未使用的导入，避免警告
+# import models.db_models
 from models.db_models import SysRole, SysUser, UserProfile
 from utils.password_utils import hash_password
 from sqlalchemy.orm import Session
@@ -74,6 +75,7 @@ def init_system_data():
 init_system_data()
 # ==================== 初始化结束 ====================
 
+# ✅ 修正：标准格式的 lifespan 函数定义
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("=" * 50)
@@ -110,54 +112,53 @@ app.add_exception_handler(Exception, global_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(BusinessException, business_exception_handler)
 
-# ==================== 路由注册（修复版，添加了答题记录路由） ====================
+# ==================== 路由注册（完整版：覆盖所有业务功能） ====================
 # 公共接口（所有角色可访问）
 from api.common import auth_router
 app.include_router(auth_router, prefix="/api/common", tags=["公共认证接口"])
 
 # 管理员接口（仅超级管理员可访问）
+from fastapi import APIRouter
 from api.admin import (
     user_manage_router,
     auditor_manage_router,
     content_global_router,
-    audit_manage_router
+    audit_manage_router,
+    system_config_router,
+    system_audit_router,
+    admin_course_router,
+    admin_knowledge_router,
+    admin_qa_router
 )
-app.include_router(user_manage_router, prefix="/api/admin/user", tags=["管理员-用户管理"])
-app.include_router(auditor_manage_router, prefix="/api/admin/auditor", tags=["管理员-审核员管理"])
-app.include_router(content_global_router, prefix="/api/admin/content", tags=["管理员-内容全局管理"])
-app.include_router(audit_manage_router, prefix="/api/admin/audit", tags=["管理员-审核管理"])
+
+# 统一管理员根路由
+admin_router = APIRouter(prefix="/api/admin")
+admin_router.include_router(user_manage_router, prefix="/user", tags=["管理员-用户管理"])
+admin_router.include_router(auditor_manage_router, prefix="/auditor", tags=["管理员-审核员管理"])
+admin_router.include_router(content_global_router, prefix="/content", tags=["管理员-内容全局管理"])
+admin_router.include_router(audit_manage_router, prefix="/audit", tags=["管理员-审核管理"])
+admin_router.include_router(system_config_router, prefix="/config", tags=["管理员-系统配置"])
+admin_router.include_router(system_audit_router, prefix="/audit/log", tags=["管理员-系统审计日志"])
+# 🔥 核心业务路由：课程管理
+admin_router.include_router(admin_course_router, prefix="/course", tags=["管理员-课程管理"])
+# 🔥 核心业务路由：知识点独立增删改查
+admin_router.include_router(admin_knowledge_router, prefix="/knowledge", tags=["管理员-知识点管理"])
+# 🔥 核心业务路由：知识点问答
+admin_router.include_router(admin_qa_router, prefix="/qa", tags=["管理员-知识点问答管理"])
+
+# 注册管理员根路由
+app.include_router(admin_router)
 
 # 审核员接口（仅审核员可访问）
 from api.auditor import audit_workbench_router, auditor_public_content_router
-app.include_router(audit_workbench_router, prefix="/api/auditor/audit", tags=["审核员-审核工作台"])
-app.include_router(auditor_public_content_router, prefix="/api/auditor/content", tags=["审核员-公共内容查看"])
+auditor_router = APIRouter(prefix="/api/auditor")
+auditor_router.include_router(audit_workbench_router, prefix="/audit", tags=["审核员-审核工作台"])
+auditor_router.include_router(auditor_public_content_router, prefix="/content", tags=["审核员-公共内容查看"])
+app.include_router(auditor_router)
 
 # 普通用户接口（仅普通用户可访问）
-from api.user import (
-    content_private_router,
-    content_public_router,
-    content_apply_router,
-    learning_center_router,
-    personal_recommend_router,
-    user_profile_router,
-    personal_center_router,
-    rag_chat_router,
-    exercise_router
-)
-# 🔥 新增：导入答题记录路由
-from api.user.exercise_record import router as exercise_record_router
-
-app.include_router(content_private_router, prefix="/api/user/content/private", tags=["用户-私有内容管理"])
-app.include_router(content_public_router, prefix="/api/user/content/public", tags=["用户-公共内容消费"])
-app.include_router(content_apply_router, prefix="/api/user/content/apply", tags=["用户-内容公开申请"])
-app.include_router(learning_center_router, prefix="/api/user/learning", tags=["用户-学习中心"])
-app.include_router(personal_recommend_router, prefix="/api/user/recommend", tags=["用户-个性化推荐"])
-app.include_router(user_profile_router, prefix="/api/user/profile", tags=["用户-用户画像"])
-app.include_router(personal_center_router, prefix="/api/user/personal", tags=["用户-个人中心"])
-app.include_router(rag_chat_router, prefix="/api/user/rag", tags=["用户-RAG问答"])
-app.include_router(exercise_router, prefix="/api/user/exercise", tags=["用户端-习题管理"])
-# 🔥 新增：注册答题记录路由
-app.include_router(exercise_record_router, prefix="/api/user/exercise-record", tags=["用户端-答题记录与错题本"])
+from api.user import user_router
+app.include_router(user_router, prefix="/api/user", tags=["普通用户-学习中心"])
 
 # ==================== 健康检查接口 ====================
 @app.get("/health", summary="健康检查接口", response_model=ApiResponse)

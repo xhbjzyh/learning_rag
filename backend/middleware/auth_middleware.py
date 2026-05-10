@@ -115,3 +115,12 @@ def role_required(allowed_roles: List[int]):
 
     # 返回校验函数
     return check_role
+from fastapi import Depends, HTTPException
+from models.db_models import SysUser
+from middleware.auth_middleware import get_current_user
+
+def check_super_admin(current_user: SysUser = Depends(get_current_user)):
+    # 假设超级管理员的 role_id=1（根据你自己的角色表调整）
+    if current_user.role_id != 1:
+        raise HTTPException(status_code=403, detail="权限不足，仅超级管理员可操作")
+    return current_user

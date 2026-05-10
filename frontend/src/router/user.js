@@ -14,12 +14,7 @@ export default [
         component: () => import('@/views/user/Dashboard.vue'),
         meta: { title: '用户仪表盘' }
       },
-      {
-        path: 'private-knowledge',
-        name: 'PrivateKnowledge',
-        component: () => import('@/views/user/PrivateKnowledge.vue'),
-        meta: { title: '私有知识库' }
-      },
+
       {
         path: 'public-content',
         name: 'PublicContent',
@@ -37,6 +32,13 @@ export default [
         name: 'LearningCenter',
         component: () => import('@/views/user/LearningCenter.vue'),
         meta: { title: '学习中心' }
+      },
+      // 🔥 必须有这个课程详情路由
+      {
+        path: 'course/:id',
+        name: 'CourseDetail',
+        component: () => import('@/views/user/CourseDetail.vue'),
+        meta: { title: '课程详情' }
       },
       {
         path: 'personal-recommend',

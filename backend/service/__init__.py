@@ -9,7 +9,7 @@ from .auditor.audit_workbench_service import audit_workbench_service
 from .user.content_private_service import content_private_service
 from .user.content_public_service import content_public_service
 from .user.learning_center_service import learning_center_service
-from .user.personal_recommend_service import personal_recommend_service
+from .user.recommendation_service import user_recommendation_service
 from .user.user_profile_service import user_profile_service
 from .user.personal_center_service import personal_center_service
 from .user.rag_service import rag_service
@@ -23,7 +23,7 @@ __all__ = [
     "content_private_service",
     "content_public_service",
     "learning_center_service",
-    "personal_recommend_service",
+    "user_recommendation_service",
     "user_profile_service",
     "personal_center_service",
     "rag_service"
