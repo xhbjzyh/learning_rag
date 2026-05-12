@@ -4,7 +4,7 @@
 from typing import List
 from sqlalchemy.orm import Session
 
-from models.db_models import KnowledgeDocument, KnowledgePoint, KnowledgeCategory
+from models.db_models import KnowledgeDocument, KnowledgePoint, KnowledgeCategory, SysUser
 from models.schemas import (
     DocumentInfoResponse,
     KnowledgePointResponse,
@@ -29,7 +29,19 @@ class ContentPublicService:
         if category_id:
             query = query.filter(KnowledgeDocument.category_id == category_id)
         documents = query.order_by(KnowledgeDocument.create_time.desc()).all()
-        return [DocumentInfoResponse.model_validate(item) for item in documents]
+        
+        # 🔥 批量获取上传用户名
+        user_ids = [doc.upload_user_id for doc in documents if doc.upload_user_id]
+        users = db.query(SysUser).filter(SysUser.id.in_(user_ids)).all() if user_ids else []
+        user_map = {user.id: user.username for user in users}
+        
+        result = []
+        for doc in documents:
+            doc_dict = DocumentInfoResponse.model_validate(doc).model_dump()
+            doc_dict['upload_username'] = user_map.get(doc.upload_user_id)
+            result.append(DocumentInfoResponse(**doc_dict))
+        
+        return result
 
     @staticmethod
     def get_public_document_detail(db: Session, doc_id: int):
@@ -42,7 +54,13 @@ class ContentPublicService:
                 code=BusinessErrorCode.DOC_NOT_EXIST,
                 msg="文档不存在或未通过审核"
             )
-        return DocumentInfoResponse.model_validate(doc)
+        
+        # 🔥 获取上传用户名
+        uploader = db.query(SysUser).filter(SysUser.id == doc.upload_user_id).first()
+        doc_dict = DocumentInfoResponse.model_validate(doc).model_dump()
+        doc_dict['upload_username'] = uploader.username if uploader else None
+        
+        return DocumentInfoResponse(**doc_dict)
 
     @staticmethod
     def get_public_knowledge_points(db: Session, doc_id: int):

@@ -34,13 +34,13 @@
         </div>
       </div>
 
-      <!-- 顶部工具栏：私有 + 公共知识库按钮 -->
+      <!-- 顶部工具栏：私有 + 公共知识库按钮（但只保留私有抽屉） -->
       <div class="kb-switch">
         <div class="btn-group">
           <el-button type="primary" size="small" @click="privateDrawerVisible = true">
             <el-icon><Folder /></el-icon> 私有知识库
           </el-button>
-          <el-button type="success" size="small" @click="publicDrawerVisible = true">
+          <el-button type="success" size="small" disabled>
             <el-icon><Document /></el-icon> 公共知识库
           </el-button>
         </div>
@@ -98,57 +98,47 @@
             <el-icon><Document /></el-icon>
             <div class="info">
               <div class="title">{{ doc.title }}</div>
-              <el-tag size="small" :type="doc.is_parsed ? 'success' : 'warning'">
-                {{ doc.is_parsed ? '已解析' : '未解析' }}
+              <el-tag size="small" :type="getProcessStatusType(doc.process_status)">
+                {{ getProcessStatusText(doc.process_status) }}
               </el-tag>
             </div>
             <div class="actions">
-              <el-button size="small" type="primary" v-if="doc.is_parsed" @click="viewPrivatePoints(doc)">知识点</el-button>
+              <!-- 解析按钮 -->
+              <el-button
+                size="small"
+                type="success"
+                @click="parseDocument(doc)"
+                :loading="doc.parsing"
+                :disabled="doc.process_status === 1"
+              >
+                {{ doc.process_status === 1 ? '解析中...' : '解析' }}
+              </el-button>
+
+              <!-- 知识点查看按钮(仅解析完成后显示) -->
+              <el-button
+                size="small"
+                type="primary"
+                v-if="doc.process_status === 2"
+                @click="viewPrivatePoints(doc)"
+              >
+                知识点
+              </el-button>
+
+              <!-- 公开申请按钮 -->
+              <el-button
+                size="small"
+                type="warning"
+                @click="applyPublic(doc)"
+                :disabled="doc.is_public === 1 || doc.process_status !== 2"
+              >
+                {{ doc.is_public === 1 ? '已公开' : '申请公开' }}
+              </el-button>
+
+              <!-- 删除按钮 -->
               <el-button size="small" type="danger" @click="deletePrivateDoc(doc)">删除</el-button>
             </div>
           </div>
         </div>
-      </div>
-    </el-drawer>
-
-    <!-- ====================== 2. 公共知识库抽屉 ====================== -->
-    <el-drawer v-model="publicDrawerVisible" title="公共知识库" direction="rtl" size="50%" :destroy-on-close="true">
-      <div class="public-drawer-content">
-        <el-row :gutter="10">
-          <el-col :span="6">
-            <div class="category-box">
-              <h4>知识分类</h4>
-              <el-menu v-model="activeCategory" @select="changePublicCategory" :router="false">
-                <el-menu-item v-for="c in publicCategoryList" :key="c.id" :index="String(c.id)">
-                  {{ c.category_name }}
-                </el-menu-item>
-              </el-menu>
-            </div>
-          </el-col>
-
-          <el-col :span="18">
-            <div v-if="publicLoading" class="loading-center">
-              <el-icon><Loading /></el-icon> 加载中...
-            </div>
-            <el-empty v-else-if="publicDocList.length === 0" description="该分类暂无文档" />
-
-            <div v-else class="public-doc-grid">
-              <el-card v-for="doc in publicDocList" :key="doc.id" shadow="hover" class="public-card">
-                <div class="card-icon">
-                  <el-icon size="30" color="#409EFF"><Document /></el-icon>
-                </div>
-                <div class="card-info">
-                  <div class="card-title">{{ doc.title }}</div>
-                  <div class="card-time">{{ formatDate(doc.create_time) }}</div>
-                </div>
-                <div class="card-actions">
-                  <el-button size="small" type="primary" @click="viewPublicDetail(doc)">查看</el-button>
-                  <el-button size="small" type="success" @click="downloadPublicDoc(doc)">下载</el-button>
-                </div>
-              </el-card>
-            </div>
-          </el-col>
-        </el-row>
       </div>
     </el-drawer>
 
@@ -186,22 +176,6 @@
       </div>
     </el-drawer>
 
-    <!-- 公共文档详情 -->
-    <el-drawer v-model="publicDetailVisible" title="文档详情" direction="rtl" size="45%">
-      <div v-if="currentPublicDoc" class="detail-box">
-        <h3>{{ currentPublicDoc.title }}</h3>
-        <div class="detail-info">
-          <span>文件名：{{ currentPublicDoc.file_name }}</span>
-          <span>上传：{{ formatDate(currentPublicDoc.create_time) }}</span>
-        </div>
-        <div class="detail-points">
-          <h4>知识点</h4>
-          <div v-for="(p, i) in publicPoints" :key="i" class="point-item">
-            <div class="point-content" v-html="formatContent(p.content)"></div>
-          </div>
-        </div>
-      </div>
-    </el-drawer>
   </div>
 </template>
 
@@ -209,7 +183,7 @@
 import ragApi from '@/api/user/rag'
 import contentPrivateApi from '@/api/user/contentPrivate'
 import contentPublicApi from '@/api/user/contentPublic'
-import { ref, nextTick, onMounted } from 'vue'
+import { ref, nextTick, onMounted, watch } from 'vue'  // 🔥 添加 watch
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { User, Platform, Folder, Document, Plus, Loading } from '@element-plus/icons-vue'
 import { formatDate } from '@/utils/format'
@@ -291,7 +265,10 @@ const pointsList = ref([])
 const loadPrivateDocs = async () => {
   privateLoading.value = true
   const res = await contentPrivateApi.getDocumentList()
-  privateDocList.value = res.data || []
+  privateDocList.value = (res.data || []).map(doc => ({
+    ...doc,
+    parsing: false  // 添加解析状态标记
+  }))
   privateLoading.value = false
 }
 
@@ -302,24 +279,66 @@ const loadCategoryList = async () => {
   categoryLoading.value = false
 }
 
-const resetUploadForm = () => {
-  uploadForm.value = { title: '', category_id: null }
-  fileList.value = []
+const parseDocument = async (doc) => {
+  try {
+    await ElMessageBox.confirm('确定要解析该文档吗？解析过程可能需要几分钟。', '提示', {
+      confirmButtonText: '开始解析',
+      cancelButtonText: '取消',
+      type: 'info'
+    })
+
+    // 设置解析中状态
+    doc.parsing = true
+
+    const res = await contentPrivateApi.parseDocument(doc.id)
+    const result = res.data
+
+    // 显示结果
+    if (result.failed_chunks && result.failed_chunks.length > 0) {
+      ElMessage.warning({
+        message: `解析完成！成功 ${result.points_count} 个知识点，${result.failed_chunks.length} 个块失败。可点击「重试」重新解析失败部分。`,
+        duration: 5000
+      })
+    } else {
+      ElMessage.success(`文档解析成功！共提取 ${result.points_count} 个知识点`)
+    }
+
+    // 重新加载文档列表
+    await loadPrivateDocs()
+  } catch (error) {
+    if (error !== 'cancel') {
+      ElMessage.error(error.message || '解析失败，请重试')
+    }
+  } finally {
+    doc.parsing = false
+  }
 }
 
-const submitUpload = async () => {
-  const fd = new FormData()
-  fd.append('title', uploadForm.value.title)
-  fd.append('file', fileList.value[0].raw)
-  if (uploadForm.value.category_id) fd.append('category_id', uploadForm.value.category_id)
-  uploadLoading.value = true
-  await axios.post('/api/user/content/private/content/private/document/upload', fd, {
-    headers: { 'Content-Type': 'multipart/form-data', Authorization: `Bearer ${getToken()}` }
-  })
-  ElMessage.success('上传成功')
-  showUploadDialog.value = false
-  loadPrivateDocs()
-  uploadLoading.value = false
+const applyPublic = async (doc) => {
+  try {
+    const { value: remark } = await ElMessageBox.prompt(
+      '请输入申请理由（可选）',
+      '申请公开文档',
+      {
+        confirmButtonText: '提交申请',
+        cancelButtonText: '取消',
+        inputPlaceholder: '例如：该文档对其他人有帮助...',
+        inputPattern: /.{0,200}/,
+        inputErrorMessage: '最多200个字符'
+      }
+    )
+
+    await contentPrivateApi.applyPublic(doc.id, remark || '')
+
+    ElMessage.success('申请提交成功，请等待审核！')
+
+    // 更新本地状态
+    doc.is_public = 1
+  } catch (error) {
+    if (error !== 'cancel') {
+      ElMessage.error(error.message || '申请失败，请重试')
+    }
+  }
 }
 
 const viewPrivatePoints = async (doc) => {
@@ -338,65 +357,70 @@ const deletePrivateDoc = async (doc) => {
 
 const formatContent = (c) => c?.replace(/\n/g, '<br>') || ''
 
-// -------------------------- 公共知识库 --------------------------
-const publicDrawerVisible = ref(false)
-const publicLoading = ref(false)
-const publicDocList = ref([])
-const activeCategory = ref('')
-const currentPublicCategory = ref(null)
-const publicDetailVisible = ref(false)
-const currentPublicDoc = ref(null)
-const publicPoints = ref([])
+// 🔥 新增: 组件挂载时预加载分类列表(用于上传弹窗)
+onMounted(() => {
+  loadCategoryList()
+})
 
-const loadPublicCategories = async () => {
-  const res = await contentPublicApi.getCategoryList()
-  publicCategoryList.value = res.data || []
-  if (publicCategoryList.value.length) {
-    activeCategory.value = String(publicCategoryList.value[0].id)
-    currentPublicCategory.value = publicCategoryList.value[0]
-    loadPublicDocs(publicCategoryList.value[0].id)
+// 🔥 新增：获取处理状态文本
+const getProcessStatusText = (status) => {
+  const statusMap = {
+    0: '待处理',
+    1: '解析中',
+    2: '已解析',
+    3: '解析失败'
+  }
+  return statusMap[status] || '未知'
+}
+
+// 🔥 新增：获取处理状态标签类型
+const getProcessStatusType = (status) => {
+  const typeMap = {
+    0: 'info',      // 待处理 - 灰色
+    1: 'warning',   // 解析中 - 橙色
+    2: 'success',   // 已解析 - 绿色
+    3: 'danger'     // 解析失败 - 红色
+  }
+  return typeMap[status] || ''
+}
+
+const resetUploadForm = () => {
+  uploadForm.value = { title: '', category_id: null }
+  fileList.value = []
+}
+
+const submitUpload = async () => {
+  const fd = new FormData()
+  fd.append('title', uploadForm.value.title)
+  fd.append('file', fileList.value[0].raw)
+  if (uploadForm.value.category_id) fd.append('category_id', uploadForm.value.category_id)
+  uploadLoading.value = true
+
+  try {
+    await axios.post('/api/user/content/private/document/upload', fd, {
+      headers: { 'Content-Type': 'multipart/form-data', Authorization: `Bearer ${getToken()}` }
+    })
+    ElMessage.success('上传成功')
+    showUploadDialog.value = false
+
+    // 🔥 修复：如果抽屉已打开，重新加载；否则等待下次打开时加载
+    if (privateDrawerVisible.value) {
+      await loadPrivateDocs()
+    }
+  } catch (error) {
+    ElMessage.error(error.response?.data?.msg || '上传失败')
+  } finally {
+    uploadLoading.value = false
   }
 }
 
-const loadPublicDocs = async (cid) => {
-  publicLoading.value = true
-  const res = await contentPublicApi.getDocumentList(cid)
-  publicDocList.value = res.data || []
-  publicLoading.value = false
-}
+// 🔥 新增：监听抽屉打开事件，自动加载数据
+watch(privateDrawerVisible, (newVal) => {
+  if (newVal) {
+    loadPrivateDocs()
+  }
+})
 
-const changePublicCategory = async (idx) => {
-  const cid = parseInt(idx)
-  currentPublicCategory.value = publicCategoryList.value.find(c => c.id === cid)
-  loadPublicDocs(cid)
-}
-
-const viewPublicDetail = async (doc) => {
-  currentPublicDoc.value = doc
-  publicDetailVisible.value = true
-  const res = await contentPublicApi.getDocumentPoints(doc.id)
-  publicPoints.value = res.data || []
-}
-
-const downloadPublicDoc = async (doc) => {
-  const token = getToken() || localStorage.getItem('token')
-  const res = await fetch(`/api/user/content/public/content/public/document/${doc.id}/download`, {
-    headers: { Authorization: `Bearer ${token}` }
-  })
-  const blob = await res.blob()
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob)
-  a.download = doc.file_name
-  a.click()
-  URL.revokeObjectURL(a.href)
-  ElMessage.success('开始下载')
-}
-
-// 打开对应抽屉时自动加载
-privateDrawerVisible.value && loadPrivateDocs()
-publicDrawerVisible.value && loadPublicCategories()
-
-onMounted(() => {})
 </script>
 
 <style scoped>
@@ -416,18 +440,13 @@ onMounted(() => {})
 .input-actions { display:flex; justify-content:space-between; margin-top:10px; }
 
 /* 抽屉样式 */
-.knowledge-drawer-content, .public-drawer-content { height:100%; display:flex; flex-direction:column; }
+.knowledge-drawer-content { height:100%; display:flex; flex-direction:column; }
 .drawer-header { display:flex; justify-content:space-between; margin-bottom:15px; padding-bottom:10px; border-bottom:1px solid #eee; }
 .doc-list { flex:1; overflow-y:auto; }
 .doc-item { display:flex; align-items:center; padding:12px; background:#f9f9f9; border-radius:8px; margin-bottom:8px; }
 .doc-item .info { flex:1; margin-left:10px; }
 .doc-item .title { font-weight:500; }
 .doc-item .actions { display:flex; gap:6px; }
-.public-doc-grid { display:grid; grid-template-columns: repeat(2,1fr); gap:10px; }
-.public-card { padding:12px; text-align:center; }
-.card-icon { margin-bottom:8px; }
-.card-title { font-weight:500; margin-bottom:4px; }
-.card-time { font-size:12px; color:#999; margin-bottom:8px; }
 .loading-center { text-align:center; padding:40px; color:#999; }
 .point-item { padding:12px; background:#f7f8fa; border-radius:8px; margin-bottom:10px; }
 .point-title { font-weight:500; color:#409EFF; margin-bottom:6px; }

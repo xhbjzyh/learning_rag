@@ -56,15 +56,15 @@ export default {
   // ========== 文档审核（完全匹配最新Swagger接口） ==========
 // 获取待审核列表
 getPendingAuditList() {
-  return request.get('/auditor/audit/audit/pending')
+  return request.get('/auditor/audit/pending')
 },
 // 获取审核历史记录
 getAuditHistory() {
-  return request.get('/auditor/audit/audit/history')
+  return request.get('/auditor/audit/history')
 },
 // 获取审核统计数据
 getAuditStats() {
-  return request.get('/auditor/audit/audit/stats')
+  return request.get('/auditor/audit/stats')
 },
 // 审核文档公开申请（PUT方法，查询参数传递）
 auditApply(applyId, auditStatus, auditRemark = '') {
@@ -73,7 +73,7 @@ auditApply(applyId, auditStatus, auditRemark = '') {
   if (auditRemark) {
     params.audit_remark = auditRemark
   }
-  return request.put(`/auditor/audit/audit/apply/${applyId}`, null, { params })
+  return request.put(`/auditor/audit/apply/${applyId}`, null, { params })
 },
 
   // ========== 内容全局管理（完全匹配Swagger接口） ==========

@@ -4,11 +4,11 @@ from fastapi import UploadFile
 from datetime import datetime
 
 # 基础存储路径
-BASE_UPLOAD_DIR = "static/resources"
+BASE_UPLOAD_DIR = "static"
 os.makedirs(BASE_UPLOAD_DIR, exist_ok=True)
 
-def save_upload_file(file: UploadFile, resource_type: str) -> str:
-    """保存上传文件，返回文件URL"""
+def save_upload_file(file: UploadFile, resource_type: str = "files") -> str:
+    """保存上传文件，返回文件相对路径"""
     # 按类型分文件夹
     save_dir = os.path.join(BASE_UPLOAD_DIR, resource_type)
     os.makedirs(save_dir, exist_ok=True)
@@ -19,8 +19,8 @@ def save_upload_file(file: UploadFile, resource_type: str) -> str:
     # 写入文件
     with open(file_path, "wb") as f:
         f.write(file.file.read())
-    # 返回相对路径（用于下载）
-    return f"/static/resources/{resource_type}/{filename}"
+    # 返回相对路径（用于前端访问）
+    return f"/static/{resource_type}/{filename}"
 
 def get_file_path(file_url: str) -> str:
     """根据URL获取本地文件路径"""

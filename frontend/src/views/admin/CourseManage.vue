@@ -198,14 +198,10 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, List } from '@element-plus/icons-vue'
 import courseApi from '@/api/admin/course.js'
-import { getToken } from '@/utils/storage'
-
-
-// 导入依赖（保持不变）
 
 const handleDetail = (id) => {
   // 跳转到独立的根路由，新开标签页
@@ -250,8 +246,23 @@ const rules = {
   category_id: [{ required: true, message: '请选择课程分类', trigger: 'change' }]
 }
 
-const uploadUrl = ref('/api/common/upload')
-const uploadHeaders = ref({ Authorization: 'Bearer ' + getToken() })
+// 上传配置
+const uploadUrl = computed(() => `${import.meta.env.VITE_API_BASE_URL}/common/upload`)
+const uploadHeaders = computed(() => ({
+  Authorization: `Bearer ${localStorage.getItem('token')}`
+}))
+
+// 上传成功
+const handleUploadSuccess = (res) => {
+  console.log('上传响应:', res) // 调试日志
+  if (res.code === 0 && res.data) {
+    // 后端返回的是 file_url，直接使用
+    form.cover_url = res.data.file_url || res.data.url
+    ElMessage.success('上传成功')
+  } else {
+    ElMessage.error(res.msg || '上传失败')
+  }
+}
 
 // ==================== 课程分类管理 ====================
 const categoryDialogVisible = ref(false)
@@ -401,12 +412,6 @@ const handleEdit = (row) => {
   editId.value = row.id
   Object.assign(form, row)
   dialogVisible.value = true
-}
-
-// 上传成功
-const handleUploadSuccess = (res) => {
-  form.cover_url = res.data.url
-  ElMessage.success('上传成功')
 }
 
 // 提交保存

@@ -252,17 +252,17 @@ class VectorStoreManager:
 
 
 # ==================== 向后兼容：保留旧的全局单例接口 ====================
-# 为了不修改现有代码，这里创建一个默认的全局实例
-# 注意：新代码应该使用 VectorStoreManager(user_id) 来实现用户隔离
+# 🔥 关键修改：不再在模块导入时创建实例，改为函数式懒加载
 _global_vector_store = None
 
 def get_global_vector_store():
-    """获取全局向量存储实例（向后兼容）"""
+    """获取全局向量存储实例（懒加载，向后兼容）"""
     global _global_vector_store
     if _global_vector_store is None:
+        logger.info("🔄 首次使用全局向量存储，正在初始化...")
         # 默认使用用户ID 0 作为全局实例
         _global_vector_store = VectorStoreManager(user_id=0)
     return _global_vector_store
 
-# 保留旧的导入名称
-vector_store = get_global_vector_store()
+# 🔥 关键修改：移除模块级别的自动初始化
+# vector_store = get_global_vector_store()  # 删除这一行

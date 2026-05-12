@@ -9,7 +9,7 @@ const userProfileApi = {
    */
   getUserProfile() {
     return request({
-      url: '/user/profile/profile',
+      url: '/user/profile',
       method: 'get'
     })
   },

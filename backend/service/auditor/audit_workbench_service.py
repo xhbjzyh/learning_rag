@@ -43,6 +43,7 @@ class AuditWorkbenchService:
                     "doc_title": doc.title,
                     "doc_type": doc.file_type,
                     "doc_size": doc.file_size,
+                    "file_path": doc.file_path,
                     "apply_user_id": apply.apply_user_id,
                     "apply_username": apply_user.username,
                     "apply_remark": apply.apply_remark,
@@ -121,8 +122,7 @@ class AuditWorkbenchService:
         apply.audit_remark = audit_remark
         apply.audit_time = func.now()
 
-        # 3. 审核通过：更新文档为公开状态
-        # 如果审核通过，更新文档为公开状态
+        # 3. 审核通过：仅更新文档为公开状态，不同步到向量库
         if audit_status == 1:
             doc = db.query(KnowledgeDocument).filter(
                 KnowledgeDocument.id == apply.doc_id
@@ -130,13 +130,7 @@ class AuditWorkbenchService:
             if doc:
                 doc.is_public = 1
                 doc.audit_status = 1
-
-                # 新增：自动同步到向量库
-                from core.rag_engine import rag_engine
-                points = db.query(KnowledgePoint).filter(KnowledgePoint.doc_id == doc.id).all()
-                for point in points:
-                    rag_engine.add_document(doc_id=point.id, title=point.title, content=point.content)
-                logger.info(f"文档{doc.id}审核通过，已自动同步到向量库")
+                logger.info(f"文档{doc.id}审核通过，已标记为公开状态（未同步到向量库）")
 
         db.commit()
         logger.info(f"审核员{auditor_id}完成申请{apply_id}的审核，结果：{audit_status}")

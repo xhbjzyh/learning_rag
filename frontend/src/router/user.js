@@ -41,6 +41,12 @@ export default [
         meta: { title: '课程详情' }
       },
       {
+        path: 'wrong-question-book',
+        name: 'WrongQuestionBook',
+        component: () => import('@/views/user/WrongQuestionBook.vue'),
+        meta: { title: '我的错题本' }
+      },
+      {
         path: 'personal-recommend',
         name: 'PersonalRecommend',
         component: () => import('@/views/user/PersonalRecommend.vue'),

@@ -39,11 +39,13 @@ from models.db_models import (
     # 推荐基础表
     RecommendationRecord,
     # ✅ 课程系统全部表（核心修复，必须显式列出）
-    CourseCategory, Course, CourseKnowledgeRel, CourseResource,
+    CourseCategory, Course, CourseResource,
     UserCourseProgress, UserResourceProgress,
     # ✅ 课程推荐系统表
     UserCourseBehavior, CourseTag, CourseTagRel, UserInterestTag,
-    UserLearningPreference, UserSimilarity, CourseSimilarity
+    UserLearningPreference, UserSimilarity, CourseSimilarity,
+    # ✅ 课程知识点相关表
+    CourseKnowledgePoint, UserCourseKnowledgeProgress, UserCourseKnowledgeMastery
 )
 from utils.password_utils import hash_password
 from utils.logger import logger
@@ -151,6 +153,34 @@ def init_default_data():
         # 提交事务
         db.commit()
         logger.info("✅ 默认知识点标签初始化完成")
+
+        # ==================== 4. 初始化默认文档分类（新增，大方向分类） ====================
+        logger.info("开始初始化默认文档分类...")
+        default_categories = [
+            {"category_name": "技术文档", "description": "编程、框架、工具等技术类文档"},
+            {"category_name": "学术论文", "description": "科研论文、学术报告等"},
+            {"category_name": "教程指南", "description": "学习教程、操作手册、最佳实践"},
+            {"category_name": "项目资料", "description": "项目文档、需求说明、设计文档"},
+            {"category_name": "读书笔记", "description": "书籍摘要、读后感、知识总结"},
+            {"category_name": "其他", "description": "其他类型文档"}
+        ]
+
+        # 批量插入分类，已存在的分类跳过
+        for cat_data in default_categories:
+            # 检查分类是否已存在（通过category_name判断）
+            exist_cat = db.query(KnowledgeCategory).filter(
+                KnowledgeCategory.category_name == cat_data["category_name"]
+            ).first()
+            if not exist_cat:
+                # 创建分类对象
+                category = KnowledgeCategory(
+                    category_name=cat_data["category_name"],
+                    description=cat_data["description"]
+                )
+                db.add(category)
+        # 提交事务
+        db.commit()
+        logger.info("✅ 默认文档分类初始化完成")
 
     except Exception as e:
         # 发生异常时回滚事务，保证数据一致性

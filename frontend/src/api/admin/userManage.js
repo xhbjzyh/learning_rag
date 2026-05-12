@@ -10,7 +10,7 @@ const adminUserApi = {
    */
   getUserList(params) {
     return request({
-      url: '/admin/user/user/list',
+      url: '/admin/user/list',
       method: 'get',
       params
     })
@@ -22,7 +22,7 @@ const adminUserApi = {
    */
   getUserDetail(userId) {
     return request({
-      url: '/admin/user/user/detail',
+      url: '/admin/user/detail',
       method: 'get',
       params: { user_id: userId }
     })
@@ -34,7 +34,7 @@ const adminUserApi = {
    */
   resetPassword(data) {
     return request({
-      url: '/admin/user/user/reset-password',
+      url: '/admin/user/reset-password',
       method: 'post',
       data
     })
@@ -46,7 +46,7 @@ const adminUserApi = {
    */
   deleteUser(userId) {
     return request({
-      url: `/admin/user/user/${userId}`,
+      url: `/admin/user/${userId}`,
       method: 'delete'
     })
   },
@@ -57,7 +57,7 @@ const adminUserApi = {
    */
   getAnswerRecords(params) {
     return request({
-      url: '/admin/user/user/answer-records',
+      url: '/admin/user/answer-records',
       method: 'get',
       params
     })
@@ -69,7 +69,7 @@ const adminUserApi = {
    */
   getLearningRecords(params) {
     return request({
-      url: '/admin/user/user/learning-records',
+      url: '/admin/user/learning-records',
       method: 'get',
       params
     })

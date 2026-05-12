@@ -137,39 +137,69 @@ class ContentPrivateService:
         ).first()
         if not doc:
             raise BusinessException(code=BusinessErrorCode.DOC_NOT_EXIST, msg="文档不存在")
+        
+        # 1. 获取该文档的所有知识点ID
+        point_ids = db.query(KnowledgePoint.id).filter(
+            KnowledgePoint.doc_id == doc_id
+        ).all()
+        point_ids = [pid[0] for pid in point_ids]
+        
+        if not point_ids:
+            # 没有知识点,直接删除文档
+            try:
+                if os.path.exists(doc.file_path):
+                    os.remove(doc.file_path)
+            except Exception as e:
+                logger.error(f"删除本地文件失败: {str(e)}")
+            
+            db.delete(doc)
+            db.commit()
+            logger.info(f"文档删除成功，文档ID: {doc_id}")
+            return
+        
+        # 2. 删除学习进度
         db.query(LearningProgress).filter(
-            LearningProgress.point_id.in_(
-                db.query(KnowledgePoint.id).filter(KnowledgePoint.doc_id == doc_id)
-            )
+            LearningProgress.point_id.in_(point_ids)
         ).delete(synchronize_session=False)
-
-        db.query(WrongQuestion).filter(
-            WrongQuestion.point_id.in_(
-                db.query(KnowledgePoint.id).filter(KnowledgePoint.doc_id == doc_id)
-            )
-        ).delete(synchronize_session=False)
-
+        
+        # 3. 删除掌握度记录
         db.query(UserKnowledgeMastery).filter(
-            UserKnowledgeMastery.knowledge_point_id.in_(
-                db.query(KnowledgePoint.id).filter(KnowledgePoint.doc_id == doc_id)
-            )
+            UserKnowledgeMastery.knowledge_point_id.in_(point_ids)
         ).delete(synchronize_session=False)
-
-        db.query(KnowledgePoint).filter(KnowledgePoint.doc_id == doc_id).delete()
-
+        
+        # 4. 🔥 修复：删除与该文档知识点相关的错题记录
+        # 错题通过习题关联知识点，需要先找到相关习题
+        from models.db_models import exercise_knowledge, Exercise
+        related_exercise_ids = db.query(exercise_knowledge.c.exercise_id).filter(
+            exercise_knowledge.c.knowledge_point_id.in_(point_ids)
+        ).distinct().all()
+        related_exercise_ids = [eid[0] for eid in related_exercise_ids]
+        
+        if related_exercise_ids:
+            db.query(WrongQuestion).filter(
+                WrongQuestion.exercise_id.in_(related_exercise_ids)
+            ).delete(synchronize_session=False)
+        
+        # 5. 删除知识点
+        db.query(KnowledgePoint).filter(
+            KnowledgePoint.doc_id == doc_id
+        ).delete(synchronize_session=False)
+        
+        # 6. 删除物理文件
         try:
             if os.path.exists(doc.file_path):
                 os.remove(doc.file_path)
         except Exception as e:
             logger.error(f"删除本地文件失败: {str(e)}")
-
+        
+        # 7. 删除文档记录
         db.delete(doc)
         db.commit()
         logger.info(f"文档删除成功，文档ID: {doc_id}")
 
     async def parse_and_extract_points(self, db: Session, doc_id: int, user_id: int):
         """
-        解析文档并提取知识点（线上大模型版，无降级）
+        解析文档并提取知识点（线上大模型版，支持断点续传）
         流程：1. 解析文档 → 2. 切分 → 3. 大模型提取 → 4. 存DB → 5. 同步向量
         """
         # 1. 查询文档
@@ -188,11 +218,15 @@ class ContentPrivateService:
         doc.process_message = "正在解析文档并提取知识点..."
         db.commit()
 
-        # 3. 🔥 关键：删除已有知识点（支持重新解析）
-        db.query(KnowledgePoint).filter(KnowledgePoint.doc_id == doc_id).delete()
-        db.commit()
-        logger.info(f"已清空文档 {doc_id} 的旧知识点，准备重新提取")
-
+        # 3. 🔥 关键：只删除未成功解析的知识点（支持断点续传）
+        # 如果之前解析过一部分，保留已成功的知识点
+        existing_points_count = db.query(KnowledgePoint).filter(
+            KnowledgePoint.doc_id == doc_id
+        ).count()
+        
+        if existing_points_count > 0:
+            logger.info(f"文档 {doc_id} 已有 {existing_points_count} 个知识点，将跳过已处理的块")
+        
         try:
             # 4. 解析文档全文
             text_content = document_parser.parse_document(doc.file_path, doc.file_type)
@@ -213,10 +247,21 @@ class ContentPrivateService:
             logger.info(f"文档切分为 {len(chunks)} 个块，开始调用大模型提取知识点")
 
             points_created = 0
+            failed_chunks = []  # 记录失败的块索引
 
             # 6. 逐块调用线上大模型提取知识点
             for i, chunk in enumerate(chunks):
                 if not chunk.strip():
+                    continue
+
+                # 🔥 断点续传：跳过已成功解析的块
+                existing_point = db.query(KnowledgePoint).filter(
+                    KnowledgePoint.doc_id == doc_id,
+                    KnowledgePoint.chunk_index == i
+                ).first()
+                
+                if existing_point:
+                    logger.info(f"第 {i+1}/{len(chunks)} 个块已存在，跳过")
                     continue
 
                 logger.info(f"正在处理第 {i+1}/{len(chunks)} 个块...")
@@ -238,30 +283,33 @@ class ContentPrivateService:
 [{{"title":"xxx","content":"xxx","key_points":["xxx","xxx"],"difficulty":"中等"}}]
 """
 
-                # 🔥 核心：调用线上大模型（异步 + 超时30秒）
-                try:
-                    response = await llm.chat(prompt, timeout=30)
-                except Exception as e:
-                    logger.error(f"大模型调用失败（第 {i+1} 块）: {str(e)}")
-                    doc.process_status = 3
-                    doc.process_message = f"大模型调用失败: {str(e)}"
-                    db.commit()
-                    raise BusinessException(
-                        code=BusinessErrorCode.DOC_PARSE_ERROR,
-                        msg=f"大模型提取知识点失败: {str(e)}"
-                    )
+                # 🔥 核心：调用线上大模型（异步 + 超时60秒，增加超时时间）
+                max_retries = 3  # 最大重试次数
+                success = False
+                
+                for retry in range(max_retries):
+                    try:
+                        response = await llm.chat(prompt, timeout=60)  # 🔥 增加到60秒
+                        success = True
+                        break
+                    except Exception as e:
+                        logger.warning(f"第 {i+1} 块第 {retry+1} 次调用失败: {str(e)}")
+                        if retry < max_retries - 1:
+                            import asyncio
+                            await asyncio.sleep(2)  # 等待2秒后重试
+                        else:
+                            logger.error(f"第 {i+1} 块最终调用失败: {str(e)}")
+                            failed_chunks.append(i)
+                
+                if not success:
+                    continue
 
                 # 解析大模型返回的JSON
                 knowledge_points = self._safe_parse_json(response)
                 if not knowledge_points:
                     logger.error(f"大模型返回JSON解析失败（第 {i+1} 块）: {response[:200]}")
-                    doc.process_status = 3
-                    doc.process_message = "大模型返回格式错误"
-                    db.commit()
-                    raise BusinessException(
-                        code=BusinessErrorCode.DOC_PARSE_ERROR,
-                        msg="大模型返回格式错误，解析失败"
-                    )
+                    failed_chunks.append(i)
+                    continue
 
                 # 存入数据库
                 for kp in knowledge_points:
@@ -279,14 +327,23 @@ class ContentPrivateService:
                     )
                     db.add(new_point)
                     points_created += 1
+                
+                # 🔥 每处理5个块提交一次，避免长时间事务
+                if (i + 1) % 5 == 0:
+                    db.commit()
+                    logger.info(f"已处理 {i+1}/{len(chunks)} 个块，累计创建 {points_created} 个知识点")
 
             # 7. 批量提交数据库
             db.commit()
             logger.info(f"✅ 知识点提取完成，共存入 {points_created} 个知识点")
 
             # 8. 更新文档状态
-            doc.process_status = 2
-            doc.process_message = f"处理完成，共提取 {points_created} 个知识点"
+            if failed_chunks:
+                doc.process_status = 2  # 部分成功
+                doc.process_message = f"部分成功，共提取 {points_created} 个知识点，{len(failed_chunks)} 个块失败: {failed_chunks}"
+            else:
+                doc.process_status = 2  # 完全成功
+                doc.process_message = f"处理完成，共提取 {points_created} 个知识点"
             db.commit()
 
             # 9. 同步到向量库
@@ -307,7 +364,12 @@ class ContentPrivateService:
             except Exception as e:
                 logger.warning(f"存入向量库失败: {e}，但知识点已存入数据库")
 
-            return {"doc_id": doc_id, "points_count": points_created, "is_new": True}
+            return {
+                "doc_id": doc_id, 
+                "points_count": points_created, 
+                "failed_chunks": failed_chunks,
+                "is_new": existing_points_count == 0
+            }
 
         except BusinessException:
             # 业务异常直接抛出

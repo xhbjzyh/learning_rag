@@ -19,11 +19,10 @@
           {{ row.file_size ? (row.file_size / 1024).toFixed(2) : 0 }} KB
         </template>
       </el-table-column>
-      <el-table-column label="发布状态" prop="is_published" width="100" align="center">
+      <!-- 仅展示：课程知识点关联 -->
+      <el-table-column label="关联课程知识点" width="180" align="center">
         <template #default="{ row }">
-          <el-tag :type="row.is_published ? 'success' : 'info'">
-            {{ row.is_published ? '已发布' : '未发布' }}
-          </el-tag>
+          {{ row.course_knowledge_ids?.join(', ') || '未关联' }}
         </template>
       </el-table-column>
       <el-table-column label="操作" width="200" align="center">
@@ -40,7 +39,6 @@
           <el-input v-model="form.title" placeholder="请输入文档名称" />
         </el-form-item>
 
-        <!-- 🔥 文件上传：自动填充URL，解决数据库非空报错 -->
         <el-form-item label="上传文档" prop="file">
           <el-upload
             ref="uploadRef"
@@ -69,8 +67,13 @@
           </el-select>
         </el-form-item>
 
-        <el-form-item label="关联知识点ID">
-          <el-input v-model="form.knowledge_ids" placeholder="多个ID用逗号分隔" />
+        <!-- 🔥 仅保留：课程知识点ID（唯一关联字段） -->
+        <el-form-item label="关联课程知识点ID" prop="course_knowledge_ids">
+          <el-input
+            v-model="form.course_knowledge_ids"
+            placeholder="例：1,2,3  多个用逗号分隔"
+            clearable
+          />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -82,11 +85,13 @@
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
+import { ref, reactive, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import courseApi from '@/api/admin/course'
 
-const props = defineProps({ courseId: [String, Number] })
+const props = defineProps({
+  courseId: [String, Number],
+})
 
 const docList = ref([])
 const loading = ref(false)
@@ -95,87 +100,93 @@ const formRef = ref(null)
 const uploadRef = ref(null)
 const isEdit = ref(false)
 
-// 表单：url 自动赋值，满足数据库非空约束
+// 🔥 仅保留：课程知识点关联字段
 const form = reactive({
   id: null,
   title: '',
   type: 'document',
-  description: '',
-  url: '', // 🔥 必传字段，文件上传后自动填充
+  url: '',
   file_size: 0,
   file_type: '',
   is_published: true,
-  knowledge_ids: []
+  course_knowledge_ids: '', // 仅课程知识点
 })
 
-// 校验规则
 const rules = {
   title: [{ required: true, message: '请输入文档名称', trigger: 'blur' }],
   file_type: [{ required: true, message: '请选择文件类型', trigger: 'change' }],
   url: [{ required: true, message: '请先上传文档', trigger: 'blur' }]
 }
 
-// 获取列表
+// 页面刷新/切换课程 自动加载列表
 const getList = async () => {
+  if (!props.courseId) return
   loading.value = true
   try {
     const res = await courseApi.getCourseMaterials(props.courseId, 'document')
-    if (res.code === 0) docList.value = res.data || []
+    if (res.code === 0) {
+      docList.value = res.data?.items || res.data || []
+    }
   } catch (error) {
-    ElMessage.error('获取失败')
+    ElMessage.error('获取文档列表失败')
   } finally {
     loading.value = false
   }
 }
 
-// 选择文件：自动填充 URL
+onMounted(() => getList())
+watch(() => props.courseId, () => getList())
+
+// 文件选择自动填充路径
 const handleFileChange = (file) => {
-  // 🔥 核心：上传文件后自动赋值 url，解决数据库报错
   form.url = `/static/resources/${file.name}`
   form.file_size = file.size
-  ElMessage.success('文件选择成功，路径已自动填充')
+  ElMessage.success('文件选择成功')
 }
 
 // 新增弹窗
 const openAddDialog = () => {
   isEdit.value = false
   Object.assign(form, {
-    id: null, title: '', type: 'document', url: '', file_size: 0, file_type: '', knowledge_ids: []
+    id: null, title: '', url: '', file_size: 0, file_type: '',
+    course_knowledge_ids: ''
   })
   dialogVisible.value = true
 }
 
-// 编辑弹窗
+// 编辑弹窗：仅回显课程知识点
 const openEditDialog = (row) => {
   isEdit.value = true
-  Object.assign(form, JSON.parse(JSON.stringify(row)))
+  Object.assign(form, {
+    ...row,
+    course_knowledge_ids: row.course_knowledge_ids?.join(',') || '',
+  })
   dialogVisible.value = true
 }
 
-// 提交表单（核心修复：强制给 url 赋值，解决数据库非空报错）
-// 🔥 终极提交：强制给URL赋值，后端永远不会收到None！
+// 🔥 核心提交：仅提交 课程知识点 给后端
+// 🔥 修复：多知识点ID处理，过滤空值/0/无效数字
 const submitForm = async () => {
   await formRef.value.validate()
   try {
-    // 构造参数，直接强制写死url，彻底解决数据库报错
     const params = {
       ...form,
-      // 核心：强制覆盖url，永远不为空！
-      url: "/static/resources/default.pdf",
+      url: form.url || "/static/resources/default.pdf",
       file_type: form.file_type || "pdf",
-      is_published: true
-    }
-
-    // 处理知识点
-    if (typeof params.knowledge_ids === 'string') {
-      params.knowledge_ids = params.knowledge_ids.split(',').map(Number).filter(i => !isNaN(i))
+      is_published: true,
+      // 核心修复：支持 1,2,3 格式，自动过滤空值，绝不提交空数组
+      course_knowledge_ids: form.course_knowledge_ids
+        ? form.course_knowledge_ids
+            .split(',')
+            .map(item => Number(item.trim())) // 去空格+转数字
+            .filter(kid => !isNaN(kid) && kid > 0) // 只保留有效ID
+        : [] // 无输入则为空数组（主动清空）
     }
 
     if (isEdit.value) {
       await courseApi.updateCourseMaterial(form.id, params)
       ElMessage.success('更新成功')
     } else {
-      // ✅ 后端收到的url一定是字符串，数据库直接通过
       await courseApi.createCourseMaterial(props.courseId, params)
       ElMessage.success('创建成功！')
     }
@@ -188,7 +199,7 @@ const submitForm = async () => {
   }
 }
 
-// 删除
+// 删除文档
 const handleDelete = async (id) => {
   await ElMessageBox.confirm('确定删除？')
   try {
@@ -202,3 +213,8 @@ const handleDelete = async (id) => {
 
 defineExpose({ getList })
 </script>
+
+<style scoped>
+.module-container { padding: 10px; }
+.tool-bar { display: flex; align-items: center; }
+</style>

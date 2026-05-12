@@ -69,7 +69,7 @@ export default {
   // 获取公共分类列表
   getCategoryList() {
     return request({
-      url: '/user/content/public/content/public/category/list',
+      url: '/user/content/public/category/list',
       method: 'get'
     })
   },
@@ -77,7 +77,7 @@ export default {
   // 获取公共文档列表（按分类ID）
   getDocumentList(categoryId) {
     return request({
-      url: '/user/content/public/content/public/document/list',
+      url: '/user/content/public/document/list',
       method: 'get',
       params: { category_id: categoryId }
     })
@@ -86,7 +86,7 @@ export default {
   // 获取文档详情
   getDocumentDetail(docId) {
     return request({
-      url: `/user/content/public/content/public/document/${docId}`,
+      url: `/user/content/public/document/${docId}`,
       method: 'get'
     })
   },
@@ -94,7 +94,7 @@ export default {
   // 获取文档知识点列表
   getDocumentPoints(docId) {
     return request({
-      url: `/user/content/public/content/public/document/${docId}/points`,
+      url: `/user/content/public/document/${docId}/points`,
       method: 'get'
     })
   },
@@ -108,7 +108,7 @@ downloadDocument(docId, fileName) {
   }
 
   const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
-  const url = `${baseUrl}/api/user/content/public/content/public/document/${docId}/download`
+  const url = `${baseUrl}/api/user/content/public/document/${docId}/download`
 
   // ✅ 用axios请求，带上Authorization请求头
   axios({

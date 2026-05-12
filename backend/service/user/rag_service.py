@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from collections import defaultdict
 
 from models.db_models import KnowledgePoint, UserLearningRecord
-from utils.vector_store import VectorStoreManager, vector_store
+from utils.vector_store import VectorStoreManager, get_global_vector_store
 from utils.logger import logger
 from core.rag_engine import rag_engine
 
@@ -55,11 +55,14 @@ class RagService:
                     "difficulty": point.difficulty
                 }])
             else:
-                vector_store.add_point(
-                    point_id=point.id,
-                    content=point.content,
-                    title=point.title
-                )
+                # 🔥 修复：使用函数获取全局实例（懒加载）
+                global_vs = get_global_vector_store()
+                global_vs.add_knowledge_points([{
+                    "id": point.id,
+                    "title": point.title,
+                    "content": point.content,
+                    "difficulty": point.difficulty
+                }])
             return True
         except Exception as e:
             logger.error(f"知识点同步到向量库失败: {point_id}, 错误: {str(e)}")
@@ -88,13 +91,16 @@ class RagService:
             vs.add_knowledge_points(knowledge_points)
             success_count = len(knowledge_points)
         else:
+            # 🔥 修复：使用函数获取全局实例（懒加载）
+            global_vs = get_global_vector_store()
             for point in points:
                 try:
-                    vector_store.add_point(
-                        point_id=point.id,
-                        content=point.content,
-                        title=point.title
-                    )
+                    global_vs.add_knowledge_points([{
+                        "id": point.id,
+                        "title": point.title,
+                        "content": point.content,
+                        "difficulty": point.difficulty
+                    }])
                     success_count += 1
                 except Exception as e:
                     logger.error(f"知识点同步失败: {point.id}, 错误: {str(e)}")
@@ -195,24 +201,24 @@ class RagService:
             conversation_memory.add_message(user_id, "user", query)
 
             # 5. 调用大模型生成回答
-            full_answer = rag_engine.answer(
+            full_answer = await rag_engine.answer(
                 query=query,
                 user_id=user_id,
                 kb_type=kb_type,
                 history=history
             )
 
-            # 6. 流式输出
+            # 6. 保存助手回答到历史
+            conversation_memory.add_message(user_id, "assistant", full_answer)
+
+            # 7. 🔥 流式输出（逐字返回）
             for char in full_answer:
                 yield char
 
-            # 7. 保存对话记忆
-            conversation_memory.add_message(user_id, "assistant", full_answer)
-            logger.info(f"✅ 用户{user_id} 流式问答完成")
-
         except Exception as e:
-            logger.error(f"❌ 流式问答异常：{str(e)}")
-            yield f"❌ 服务异常：{str(e)}"
+            logger.error(f"❌ 流式问答失败：{str(e)}")
+            yield f"⚠️ 回答失败：{str(e)}"
+
 
 # 全局单例
 rag_service = RagService()

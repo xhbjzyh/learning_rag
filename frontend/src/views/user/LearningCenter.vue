@@ -1,6 +1,11 @@
 <template>
   <div class="learning-center">
-    <h2 class="page-title">学习中心</h2>
+    <div class="page-header">
+      <h2 class="page-title">学习中心</h2>
+      <el-button type="primary" :icon="Notebook" @click="goToWrongBook">
+        我的错题本
+      </el-button>
+    </div>
 
     <!-- 顶部搜索栏 -->
     <div class="search-bar">
@@ -121,7 +126,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Search, User, View } from '@element-plus/icons-vue'
+import { Search, User, View, Notebook } from '@element-plus/icons-vue'
 import courseApi from '@/api/user/course.js'
 
 const router = useRouter()
@@ -160,7 +165,7 @@ const level2Categories = computed(() => {
 // 计算属性：三级分类
 const level3Categories = computed(() => {
   if (!selectedLevel2.value) return []
-  const level2 = allCategories.value.find(cat => cat.id === selectedLevel2.value)
+  const level2 = allCategories.value.find(cat => id === selectedLevel2.value)
   return level2?.children || []
 })
 
@@ -188,8 +193,9 @@ const loadCourseList = async () => {
       page_size: pageSize.value
     })
     if (res && res.code === 0) {
-      courseList.value = res.data.list
-      total.value = res.data.total
+      // ✅ 重点：后端返回的列表字段以实际接口返回为准（Swagger测试后确认）
+      courseList.value = res.data.items || res.data.list || []
+      total.value = res.data.total || 0
     }
   } catch (error) {
     console.error('加载课程列表失败:', error)
@@ -241,6 +247,11 @@ const goToCourseDetail = (courseId) => {
   router.push(`/user/course/${courseId}`)
 }
 
+// 跳转到错题本
+const goToWrongBook = () => {
+  router.push('/user/wrong-question-book')
+}
+
 onMounted(() => {
   loadCategories()
   loadCourseList()
@@ -252,8 +263,15 @@ onMounted(() => {
   padding: 20px;
 }
 
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
 .page-title {
-  margin: 0 0 24px;
+  margin: 0;
   font-size: 24px;
   font-weight: 600;
   color: #333;

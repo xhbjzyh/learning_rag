@@ -208,20 +208,32 @@ class LearningCenterService:
     def get_user_learning_stats(db: Session, user_id: int):
         """
         获取用户学习统计数据
+        🔥 修复：从 user_resource_progress 表读取视频/文档学习时长
         """
-        # 总学习时长
-        total_duration = db.query(func.sum(LearningProgress.study_duration)).filter(
-            LearningProgress.user_id == user_id
+        from models.db_models import UserResourceProgress, CourseResource
+        
+        # 🔥 核心修复：从 user_resource_progress 读取总学习时长
+        total_duration = db.query(func.sum(UserResourceProgress.total_study_duration)).filter(
+            UserResourceProgress.user_id == user_id
         ).scalar() or 0
 
-        # 已完成知识点数量
-        finished_count = db.query(LearningProgress).filter(
-            LearningProgress.user_id == user_id,
-            LearningProgress.is_finished == True
+        # 🔥 计算已完成的学习项数量（视频+文档）
+        finished_count = db.query(UserResourceProgress).filter(
+            UserResourceProgress.user_id == user_id,
+            UserResourceProgress.is_finished == True
         ).count()
 
-        # 总知识点数量
-        total_points = db.query(KnowledgePoint).count()
+        # 🔥 总学习资源数量（视频+文档）
+        total_resources = db.query(CourseResource).filter(
+            CourseResource.type.in_(['video', 'document'])
+        ).count()
+
+        # 🔥 今日学习时长
+        today = datetime.now().date()
+        today_duration = db.query(func.sum(UserResourceProgress.total_study_duration)).filter(
+            UserResourceProgress.user_id == user_id,
+            func.date(UserResourceProgress.last_study_time) == today
+        ).scalar() or 0
 
         # 错题数量
         wrong_count = db.query(WrongQuestion).filter(
@@ -229,19 +241,12 @@ class LearningCenterService:
             WrongQuestion.master_level < 2
         ).count()
 
-        # 今日学习时长
-        today = datetime.now().date()
-        today_duration = db.query(func.sum(LearningProgress.study_duration)).filter(
-            LearningProgress.user_id == user_id,
-            func.date(LearningProgress.last_study_time) == today
-        ).scalar() or 0
-
         return {
             "total_study_duration": total_duration,
             "total_study_duration_hours": round(total_duration / 3600, 1),
             "finished_points_count": finished_count,
-            "total_points_count": total_points,
-            "completion_rate": round(finished_count / total_points * 100, 1) if total_points > 0 else 0,
+            "total_points_count": total_resources,
+            "completion_rate": round(finished_count / total_resources * 100, 1) if total_resources > 0 else 0,
             "wrong_question_count": wrong_count,
             "today_study_duration": today_duration,
             "today_study_duration_minutes": round(today_duration / 60, 1)

@@ -83,10 +83,6 @@
           <el-icon><Notebook /></el-icon>
           <template #title>学习中心</template>
         </el-menu-item>
-        <el-menu-item index="/user/personal-recommend">
-          <el-icon><MagicStick /></el-icon>
-          <template #title>个性化推荐</template>
-        </el-menu-item>
         <el-menu-item index="/user/user-profile">
           <el-icon><User /></el-icon>
           <template #title>个人中心</template>
@@ -105,7 +101,7 @@ import { isSuperAdmin as checkIsSuperAdmin, isAuditor as checkIsAuditor } from '
 // 🔥 导入所有100%存在的图标，删掉所有错误图标
 import {
   DataAnalysis, User, UserFilled, Document, List, Check, Setting,
-  ChatDotRound, Notebook, MagicStick
+  ChatDotRound, Notebook
 } from '@element-plus/icons-vue'
 
 const route = useRoute()

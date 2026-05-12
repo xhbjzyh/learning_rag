@@ -11,9 +11,6 @@ from .audit_manage import router as audit_manage_router
 from .system_config import router as system_config_router
 # 系统审计
 from .system_audit import router as system_audit_router
-# 🔥 新增：课程管理（核心）
+
+# 课程管理（已包含习题接口）
 from .course import router as admin_course_router
-# 🔥 新增：知识点管理（核心）
-from .admin_knowledge_routes import router as admin_knowledge_router
-# 🔥 新增：知识点问答管理
-from .admin_knowledge_routes import router as admin_qa_router

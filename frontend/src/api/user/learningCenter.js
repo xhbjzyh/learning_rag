@@ -100,6 +100,17 @@ const learningCenterApi = {
       url: `/user/exercise-record/wrong/${wrongId}`,
       method: 'delete'
     }).then(res => res || {})
+  },
+
+  // -------------- 学习统计 --------------
+  /**
+   * 获取学习统计数据（Dashboard用）
+   */
+  getStats() {
+    return request({
+      url: '/user/learning-center/stats',
+      method: 'get'
+    }).then(res => res || {})
   }
 }
 

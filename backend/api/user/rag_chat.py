@@ -9,8 +9,8 @@ from middleware.auth_middleware import get_current_user
 from models.db_models import SysUser, KnowledgePoint
 from service.user.rag_service import rag_service
 
-# 核心修复：去掉所有前缀！main.py 已经注册了 /api/user/rag
-router = APIRouter(tags=["用户-RAG问答"])
+# 添加 /rag 前缀，使路由更清晰
+router = APIRouter(prefix="/rag", tags=["用户-RAG问答"])
 
 # ==============================================
 # 原有接口保持不变
@@ -23,22 +23,27 @@ async def rag_answer(
         current_user: SysUser = Depends(get_current_user)
 ):
     try:
-        # 调用RAG引擎
-        answer = rag_engine.answer(query, current_user.id, kb_type)
+        # 调用RAG引擎（异步）
+        answer = await rag_engine.answer(query, current_user.id, kb_type)
 
-        # 个性化推荐
+        # 个性化课程推荐（当检测到学习相关问题时）
         try:
-            from service.user.recommendation_service import personal_recommend_service
-            recommendations = {
-                "knowledge_points": personal_recommend_service.get_related_points(query, current_user.id, db, 3),
-                "exercises": personal_recommend_service.get_related_exercises(query, current_user.id, db, 2)
-            }
-        except:
-            recommendations = {}
+            from service.user.recommendation_service import recommendation_service
+            recommendations = recommendation_service.get_personalized_recommendations(
+                db=db,
+                user_id=current_user.id,
+                query=query,
+                limit=3
+            )
+        except Exception as e:
+            logger.warning(f"课程推荐功能异常: {str(e)}")
+            recommendations = []
 
         return success_response(data={
             "answer": answer,
-            "recommendations": recommendations,
+            "recommendations": {
+                "courses": recommendations
+            },
             "kb_type": kb_type
         })
     except Exception as e:
@@ -73,6 +78,31 @@ async def rag_answer_stream(
             clear_history=clear_history
         ):
             yield chunk
+        
+        # 🔥 在学习相关问题时，附加课程推荐
+        try:
+            from service.user.recommendation_service import recommendation_service
+            intent = recommendation_service.detect_learning_intent(query)
+            
+            if intent["is_learning"]:
+                recommendations = recommendation_service.search_courses_by_keywords(
+                    db=db,
+                    keywords=intent["topics"],
+                    difficulty=intent["level"],
+                    limit=3
+                )
+                
+                if recommendations:
+                    # 以JSON格式附加推荐信息
+                    import json
+                    recommend_text = f"\n\n📚 为你推荐以下课程：\n"
+                    for i, course in enumerate(recommendations, 1):
+                        recommend_text += f"{i}. 《{course['title']}》 - {course['lecturer']}\n"
+                        recommend_text += f"   {course['reason']}\n"
+                    
+                    yield recommend_text.encode('utf-8')
+        except Exception as e:
+            logger.warning(f"流式推荐异常: {str(e)}")
 
     return StreamingResponse(generate(), media_type="text/plain")
 

@@ -20,17 +20,33 @@ const userStore = useUserStore()
 onMounted(() => {
   const roleId = userStore.roleId
 
+  // 🔥 添加调试日志
+  console.log('=== Redirect 页面 ===')
+  console.log('roleId:', roleId)
+  console.log('isLoggedIn:', userStore.isLoggedIn)
+  console.log('userInfo:', userStore.userInfo)
+
+  if (!roleId) {
+    console.error('❌ roleId 为空，退回登录页')
+    router.replace('/login')
+    return
+  }
+
   if (roleId === RoleEnum.SUPER_ADMIN) {
     // 超级管理员
+    console.log('✅ 跳转到管理员仪表盘')
     router.replace('/admin/dashboard')
   } else if (roleId === RoleEnum.AUDITOR) {
     // 审核员
+    console.log('✅ 跳转到审核员仪表盘')
     router.replace('/auditor/dashboard')
   } else if (roleId === RoleEnum.USER) {
     // 普通用户
+    console.log('✅ 跳转到用户仪表盘')
     router.replace('/user/dashboard')
   } else {
     // 未知角色，退回登录页
+    console.error('❌ 未知角色:', roleId, '，退回登录页')
     router.replace('/login')
   }
 })

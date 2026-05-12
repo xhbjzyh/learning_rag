@@ -188,14 +188,14 @@ class UserProfileEngine:
         ).all()
 
         type_counts = {
-            "video": 0,
+            "videos": 0,
             "book": 0,
             "exercise": 0
         }
 
         for progress in progresses:
-            if progress.resource.type == "video":
-                type_counts["video"] += progress.progress / 100
+            if progress.resource.type == "videos":
+                type_counts["videos"] += progress.progress / 100
             elif progress.resource.type in ["book", "document"]:
                 type_counts["book"] += progress.progress / 100
 
@@ -206,7 +206,7 @@ class UserProfileEngine:
         type_counts["exercise"] = min(exercise_count / 100, 1.0)
 
         total = sum(type_counts.values()) or 1
-        preference.preferred_type_video = type_counts["video"] / total
+        preference.preferred_type_video = type_counts["videos"] / total
         preference.preferred_type_book = type_counts["book"] / total
         preference.preferred_type_exercise = type_counts["exercise"] / total
 
@@ -407,6 +407,39 @@ class UserAnswerProfileService:
             "total_answer_time": total_answer_time
         }
 
+    def _calculate_total_study_duration(self, user_id: int, db: Session) -> int:
+        """
+        计算用户总学习时长（秒）
+        🔥 修复：从多个数据源汇总学习时长
+        - user_resource_progress: 视频/文档学习时长
+        - learning_progress: 知识点学习时长  
+        - user_learning_record: 学习记录时长
+        """
+        from models.db_models import UserResourceProgress, LearningProgress, UserLearningRecord
+        
+        # 1. 从 user_resource_progress 获取视频/文档学习时长
+        resource_duration = db.query(func.sum(UserResourceProgress.total_study_duration)).filter(
+            UserResourceProgress.user_id == user_id
+        ).scalar() or 0
+        
+        # 2. 从 learning_progress 获取知识点学习时长
+        learning_duration = db.query(func.sum(LearningProgress.study_duration)).filter(
+            LearningProgress.user_id == user_id
+        ).scalar() or 0
+        
+        # 3. 从 user_learning_record 获取学习记录时长
+        record_duration = db.query(func.sum(UserLearningRecord.learn_duration)).filter(
+            UserLearningRecord.user_id == user_id
+        ).scalar() or 0
+        
+        # 返回最大值的作为总时长（避免重复计算）
+        # 通常 resource_duration 是最准确的视频学习时长
+        total_duration = max(resource_duration, learning_duration, record_duration)
+        
+        logger.info(f"用户 {user_id} 学习时长统计 - 资源: {resource_duration}s, 知识点: {learning_duration}s, 记录: {record_duration}s, 总计: {total_duration}s")
+        
+        return total_duration
+
     def _analyze_weak_strong_tags(self, user_id: int, db: Session) -> (List[Dict], List[Dict]):
         """分析用户的薄弱标签和优势标签"""
         # 1. 获取用户所有知识点掌握度
@@ -486,8 +519,9 @@ class UserAnswerProfileService:
         else:
             profile.preferred_difficulty = "简单"
 
-        # 3. 更新统计数据
-        profile.total_study_duration = stats.get("total_answer_time", 0)
+        # 3. 🔥 核心修复：使用完整的学习时长而不是仅答题时间
+        total_study_duration = self._calculate_total_study_duration(profile.user_id, db)
+        profile.total_study_duration = total_study_duration
         profile.average_score = stats.get("average_score", 0.0)
 
         # 4. 更新薄弱/优势标签
@@ -502,7 +536,7 @@ class UserAnswerProfileService:
         profile.finished_points_count = finished_count
 
         db.commit()
-        logger.info(f"用户 {profile.user_id} 答题画像已更新")
+        logger.info(f"用户 {profile.user_id} 答题画像已更新，总学习时长: {total_study_duration}秒")
 
     def update_profile_after_answer(self, user_id: int, db: Session):
         """答题后更新用户画像（在答题记录服务中调用）"""

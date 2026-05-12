@@ -1,280 +1,194 @@
+
+"""
+个性化推荐服务
+基于用户问题和用户画像，推荐相关课程和学习资源
+"""
 from sqlalchemy.orm import Session
-from models.db_models import (
-    UserProfile, UserKnowledgeMastery, UserLearningPreference,
-    Course, CourseResource, KnowledgePoint, KnowledgeQaRecord
-)
-from fastapi import HTTPException
-from datetime import datetime, timedelta
-import json
+from typing import List, Dict
+from models.db_models import Course, CourseCategory, SysUser, UserProfile
+from utils.logger import logger
 
-class UserRecommendationService:
-    """
-    用户端个性化推荐业务逻辑（三源融合版）
-    """
 
-    def get_personalized_recommendations(self, db: Session, user_id: int, limit: int = 10):
+class RecommendationService:
+    """推荐服务类"""
+
+    # 学习相关的关键词映射
+    LEARNING_KEYWORDS = {
+        "入门": ["入门", "基础", "初学者", "新手", "开始", "从零"],
+        "进阶": ["进阶", "提高", "深入", "高级", "精通", "提升"],
+        "算法": ["算法", "数据结构", "排序", "查找", "图论", "动态规划"],
+        "编程": ["编程", "代码", "开发", "程序设计", "软件工程"],
+        "机器学习": ["机器学习", "深度学习", "AI", "人工智能", "神经网络"],
+        "数据库": ["数据库", "SQL", "MySQL", "PostgreSQL", "数据存储"],
+        "前端": ["前端", "HTML", "CSS", "JavaScript", "Vue", "React"],
+        "后端": ["后端", "服务器", "API", "微服务", "Spring", "Django"],
+    }
+
+    def detect_learning_intent(self, query: str) -> Dict:
         """
-        获取综合个性化推荐结果
+        检测用户是否有学习意图，并识别学习方向
+        :param query: 用户问题
+        :return: {"is_learning": bool, "topics": list, "level": str}
         """
-        # 1. 薄弱点推荐（权重最高）
-        weak_point_recommendations = self.get_weak_points_recommendation(db, user_id, limit=4)
+        query_lower = query.lower()
 
-        # 2. 最近问答相关推荐
-        recent_qa_recommendations = self.get_recent_qa_recommendation(db, user_id, limit=3)
+        # 学习意图关键词
+        learning_indicators = [
+            "怎么学", "如何学", "学习", "教程", "课程", "建议",
+            "推荐", "路线", "路径", "从哪开始", "应该学"
+        ]
 
-        # 3. 热门课程推荐
-        hot_course_recommendations = self.get_hot_course_recommendation(db, limit=3)
+        is_learning = any(keyword in query_lower for keyword in learning_indicators)
 
-        # 合并并去重
-        all_recommendations = []
-        seen_ids = set()
+        if not is_learning:
+            return {"is_learning": False, "topics": [], "level": None}
 
-        for rec in weak_point_recommendations + recent_qa_recommendations + hot_course_recommendations:
-            if rec["id"] not in seen_ids:
-                seen_ids.add(rec["id"])
-                all_recommendations.append(rec)
+        # 识别主题
+        topics = []
+        for topic, keywords in self.LEARNING_KEYWORDS.items():
+            if any(keyword in query_lower for keyword in keywords):
+                topics.append(topic)
 
-        return all_recommendations[:limit]
+        # 识别难度级别
+        level = None
+        if any(kw in query_lower for kw in ["入门", "基础", "初学者", "新手"]):
+            level = "简单"
+        elif any(kw in query_lower for kw in ["进阶", "高级", "深入"]):
+            level = "困难"
+        else:
+            level = "中等"
 
-    def get_weak_points_recommendation(self, db: Session, user_id: int, limit: int = 5):
+        return {
+            "is_learning": True,
+            "topics": topics if topics else ["通用"],
+            "level": level
+        }
+
+    def search_courses_by_keywords(
+            self,
+            db: Session,
+            keywords: List[str],
+            difficulty: str = None,
+            limit: int = 3
+    ) -> List[Dict]:
         """
-        基于三源融合掌握度的薄弱点推荐
+        根据关键词搜索相关课程
+        :param db: 数据库会话
+        :param keywords: 搜索关键词列表
+        :param difficulty: 难度过滤
+        :param limit: 返回数量限制
+        :return: 课程列表
         """
-        # 查询用户所有未完全掌握的知识点，按综合得分升序排列
-        weak_points = db.query(UserKnowledgeMastery).filter(
-            UserKnowledgeMastery.user_id == user_id,
-            UserKnowledgeMastery.mastery_score < 70
-        ).order_by(
-            UserKnowledgeMastery.mastery_score.asc(),
-            UserKnowledgeMastery.exercise_mastery.asc(),
-            UserKnowledgeMastery.qa_mastery.asc()
-        ).limit(limit).all()
+        if not keywords or keywords == ["通用"]:
+            # 如果没有特定主题，返回热门课程
+            query = db.query(Course).filter(
+                Course.is_published == True
+            ).order_by(Course.view_count.desc())
+        else:
+            # 构建模糊查询条件
+            conditions = []
+            for keyword in keywords:
+                conditions.append(Course.title.like(f"%{keyword}%"))
+                conditions.append(Course.description.like(f"%{keyword}%"))
 
-        recommendations = []
-        for mastery in weak_points:
-            # 获取知识点详情
-            point = db.query(KnowledgePoint).get(mastery.knowledge_point_id)
-            if not point:
-                continue
+            from sqlalchemy import or_
+            query = db.query(Course).filter(
+                Course.is_published == True,
+                or_(*conditions)
+            )
 
-            # 选择最合适的资源类型
-            preferred_type = self._get_preferred_resource_type(db, user_id, mastery)
+        # 难度过滤
+        if difficulty:
+            query = query.filter(Course.difficulty == difficulty)
 
-            # 查询该知识点关联的对应类型资源
-            resource = db.query(CourseResource).filter(
-                CourseResource.knowledge_points.any(id=point.id),
-                CourseResource.type == preferred_type,
-                CourseResource.is_published == True
+        courses = query.limit(limit).all()
+
+        # 格式化返回结果
+        result = []
+        for course in courses:
+            # 获取分类名称
+            category = db.query(CourseCategory).filter(
+                CourseCategory.id == course.category_id
             ).first()
 
-            recommendations.append({
-                "id": point.id,
-                "type": "knowledge_point",
-                "title": point.title,
-                "content": point.content[:100] + "..." if len(point.content) > 100 else point.content,
-                "difficulty": point.difficulty,
-                "mastery_score": round(mastery.mastery_score, 1),
-                "weak_reason": self._generate_weak_reason(mastery),
-                "recommended_resource": resource,
-                "recommendation_reason": "基于你的薄弱点推荐"
-            })
-
-        return recommendations
-
-    def get_recent_qa_recommendation(self, db: Session, user_id: int, limit: int = 3):
-        """
-        基于用户最近问答记录的推荐
-        """
-        # 查询用户最近7天的问答记录
-        seven_days_ago = datetime.utcnow() - timedelta(days=7)
-        recent_qa = db.query(KnowledgeQaRecord).filter(
-            KnowledgeQaRecord.user_id == user_id,
-            KnowledgeQaRecord.create_time >= seven_days_ago
-        ).order_by(KnowledgeQaRecord.create_time.desc()).limit(5).all()
-
-        # 提取相关知识点并去重
-        point_ids = list({qa.knowledge_point_id for qa in recent_qa})
-
-        recommendations = []
-        for point_id in point_ids:
-            point = db.query(KnowledgePoint).get(point_id)
-            if not point:
-                continue
-
-            # 查询该知识点的相关资源
-            resources = db.query(CourseResource).filter(
-                CourseResource.knowledge_points.any(id=point_id),
-                CourseResource.is_published == True
-            ).limit(2).all()
-
-            recommendations.append({
-                "id": point.id,
-                "type": "knowledge_point",
-                "title": point.title,
-                "content": point.content[:100] + "..." if len(point.content) > 100 else point.content,
-                "difficulty": point.difficulty,
-                "related_resources": resources,
-                "recommendation_reason": "基于你最近的提问推荐"
-            })
-
-        return recommendations[:limit]
-
-    def get_hot_course_recommendation(self, db: Session, user_id: int, limit: int = 5):
-        """
-        基于用户能力水平的热门课程推荐
-        """
-        # 获取用户画像
-        profile = db.query(UserProfile).filter(UserProfile.user_id == user_id).first()
-
-        # 确定推荐难度范围
-        difficulty_range = ["中等"]
-        if profile:
-            if profile.comprehensive_ability < 40:
-                difficulty_range = ["简单", "中等"]
-            elif profile.comprehensive_ability < 70:
-                difficulty_range = ["中等", "困难"]
-            else:
-                difficulty_range = ["困难"]
-
-        # 查询热门课程
-        hot_courses = db.query(Course).filter(
-            Course.is_published == True,
-            Course.is_public == True,
-            Course.difficulty.in_(difficulty_range)
-        ).order_by(Course.view_count.desc()).limit(limit).all()
-
-        recommendations = []
-        for course in hot_courses:
-            recommendations.append({
+            result.append({
                 "id": course.id,
-                "type": "course",
                 "title": course.title,
-                "description": course.description[:100] + "..." if course.description and len(course.description) > 100 else course.description,
+                "description": course.description[:100] if course.description else "",
                 "cover_url": course.cover_url,
                 "lecturer": course.lecturer,
                 "difficulty": course.difficulty,
+                "category_name": category.name if category else "未分类",
                 "view_count": course.view_count,
-                "recommendation_reason": "热门课程推荐"
+                "reason": self._generate_recommend_reason(course, keywords)
             })
 
-        return recommendations
+        return result
 
-    def get_learning_path(self, db: Session, user_id: int, target_point_id: int):
+    def _generate_recommend_reason(self, course: Course, keywords: List[str]) -> str:
+        """生成推荐理由"""
+        if keywords == ["通用"]:
+            return "热门课程，适合系统学习"
+
+        matched_keywords = [
+            kw for kw in keywords
+            if kw in course.title or (course.description and kw in course.description)
+        ]
+
+        if matched_keywords:
+            return f"与你关注的「{'、'.join(matched_keywords)}」相关"
+        else:
+            return "可能对你有帮助的相关课程"
+
+    def get_personalized_recommendations(
+            self,
+            db: Session,
+            user_id: int,
+            query: str,
+            limit: int = 3
+    ) -> List[Dict]:
         """
-        生成从当前水平到目标知识点的学习路径
+        获取个性化课程推荐
+        :param db: 数据库会话
+        :param user_id: 用户ID
+        :param query: 用户问题
+        :param limit: 推荐数量
+        :return: 推荐课程列表
         """
-        # 获取目标知识点
-        target_point = db.query(KnowledgePoint).get(target_point_id)
-        if not target_point:
-            raise HTTPException(status_code=404, detail="知识点不存在")
+        try:
+            # 1. 检测学习意图
+            intent = self.detect_learning_intent(query)
 
-        # 解析前置知识
-        pre_knowledge_ids = []
-        if target_point.pre_knowledge:
-            try:
-                pre_knowledge_ids = json.loads(target_point.pre_knowledge)
-            except:
-                pass
+            if not intent["is_learning"]:
+                return []
 
-        # 获取用户对前置知识的掌握情况
-        learning_path = []
-        for pre_id in pre_knowledge_ids:
-            pre_point = db.query(KnowledgePoint).get(pre_id)
-            if not pre_point:
-                continue
+            logger.info(f"检测到学习意图 - 主题: {intent['topics']}, 难度: {intent['level']}")
 
-            mastery = db.query(UserKnowledgeMastery).filter(
-                UserKnowledgeMastery.user_id == user_id,
-                UserKnowledgeMastery.knowledge_point_id == pre_id
-            ).first()
+            # 2. 基于关键词搜索课程
+            recommendations = self.search_courses_by_keywords(
+                db=db,
+                keywords=intent["topics"],
+                difficulty=intent["level"],
+                limit=limit
+            )
 
-            if not mastery or mastery.mastery_score < 70:
-                # 推荐学习该前置知识
-                learning_path.append({
-                    "order": len(learning_path) + 1,
-                    "knowledge_point": pre_point,
-                    "mastery_score": mastery.mastery_score if mastery else 0,
-                    "suggestion": "需要先学习该前置知识",
-                    "recommended_resource": self._get_best_resource(db, pre_id)
-                })
+            # 3. 如果结果不足，补充热门推荐
+            if len(recommendations) < limit:
+                additional = self.search_courses_by_keywords(
+                    db=db,
+                    keywords=["通用"],
+                    difficulty=None,
+                    limit=limit - len(recommendations)
+                )
+                recommendations.extend(additional)
 
-        # 添加目标知识点
-        learning_path.append({
-            "order": len(learning_path) + 1,
-            "knowledge_point": target_point,
-            "mastery_score": 0,
-            "suggestion": "目标知识点",
-            "recommended_resource": self._get_best_resource(db, target_point_id)
-        })
+            logger.info(f"为用户 {user_id} 推荐了 {len(recommendations)} 门课程")
+            return recommendations
 
-        return learning_path
-
-    def _get_preferred_resource_type(self, db: Session, user_id: int, mastery: UserKnowledgeMastery) -> str:
-        """
-        根据用户学习偏好和知识点掌握情况选择最合适的资源类型
-        """
-        # 获取用户学习偏好
-        preference = db.query(UserLearningPreference).filter(
-            UserLearningPreference.user_id == user_id
-        ).first()
-
-        if not preference:
-            return "video"
-
-        # 对于掌握度特别低的知识点，优先推荐视频
-        if mastery.mastery_score < 30:
-            return "video"
-
-        # 对于掌握度中等的知识点，优先推荐习题
-        if mastery.mastery_score < 60:
-            return "exercise"
-
-        # 对于掌握度较高的知识点，根据用户偏好推荐
-        preferences = {
-            "video": preference.preferred_type_video,
-            "document": preference.preferred_type_book,
-            "exercise": preference.preferred_type_exercise
-        }
-
-        return max(preferences, key=preferences.get)
-
-    def _generate_weak_reason(self, mastery: UserKnowledgeMastery) -> str:
-        """
-        生成个性化的薄弱点原因说明
-        """
-        reasons = []
-        if mastery.exercise_mastery < 50:
-            reasons.append("习题正确率较低")
-        if mastery.video_mastery < 60:
-            reasons.append("视频学习不够完整")
-        if mastery.qa_mastery < 50:
-            reasons.append("相关问题较多")
-
-        if not reasons:
-            return "需要进一步巩固"
-        return "、".join(reasons)
-
-    def _get_best_resource(self, db: Session, point_id: int):
-        """
-        获取知识点的最佳学习资源
-        """
-        # 优先推荐视频资源
-        resource = db.query(CourseResource).filter(
-            CourseResource.knowledge_points.any(id=point_id),
-            CourseResource.type == "video",
-            CourseResource.is_published == True
-        ).first()
-
-        if not resource:
-            # 没有视频则推荐文档
-            resource = db.query(CourseResource).filter(
-                CourseResource.knowledge_points.any(id=point_id),
-                CourseResource.type == "document",
-                CourseResource.is_published == True
-            ).first()
-
-        return resource
+        except Exception as e:
+            logger.error(f"获取个性化推荐失败: {str(e)}")
+            return []
 
 
 # 全局单例
-user_recommendation_service = UserRecommendationService()
+recommendation_service = RecommendationService()

@@ -6,6 +6,8 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+# 🔥 【仅新增1行】导入静态文件依赖
+from fastapi.staticfiles import StaticFiles
 
 # ==================== 内部模块导入 ====================
 from config.settings import settings
@@ -24,8 +26,6 @@ from core.rag_engine import rag_engine
 
 # ==================== 数据库自动建表 + 初始化管理员 ====================
 from db.sqlite_conn import engine, Base
-# ✅ 修正：注释掉未使用的导入，避免警告
-# import models.db_models
 from models.db_models import SysRole, SysUser, UserProfile
 from utils.password_utils import hash_password
 from sqlalchemy.orm import Session
@@ -75,7 +75,8 @@ def init_system_data():
 init_system_data()
 # ==================== 初始化结束 ====================
 
-# ✅ 修正：标准格式的 lifespan 函数定义
+# ✅ 标准格式的 lifespan 函数定义
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("=" * 50)
@@ -88,8 +89,7 @@ async def lifespan(app: FastAPI):
     yield
     logger.info("🛑 后端服务已关闭")
 
-
-# 🔥 注意：app必须定义在路由注册的前面！
+# 🔥 核心：App 实例定义
 app = FastAPI(
     title="基于RAG的个性化学习推荐系统",
     description="管理端+用户端双角色体系的AI学习平台后端API",
@@ -98,6 +98,10 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# 🔥 【仅新增1行】配置静态文件服务（解决视频404）
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# 跨域中间件
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -106,19 +110,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 日志/异常中间件
 app.add_middleware(RequestLogMiddleware)
-
 app.add_exception_handler(Exception, global_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(BusinessException, business_exception_handler)
 
-# ==================== 路由注册（完整版：覆盖所有业务功能） ====================
+# ==================== 路由注册（完整版：无冲突、全适配） ====================
 # 公共接口（所有角色可访问）
 from api.common import auth_router
 app.include_router(auth_router, prefix="/api/common", tags=["公共认证接口"])
 
 # 管理员接口（仅超级管理员可访问）
 from fastapi import APIRouter
+# ✅ 修正：导入所有管理员子路由（无重复、无冲突）
 from api.admin import (
     user_manage_router,
     auditor_manage_router,
@@ -126,39 +131,35 @@ from api.admin import (
     audit_manage_router,
     system_config_router,
     system_audit_router,
-    admin_course_router,
-    admin_knowledge_router,
-    admin_qa_router
+    admin_course_router,      # 课程管理（优化版 + 习题接口）
+             # 知识点问答管理（修复重复导入）
 )
 
 # 统一管理员根路由
 admin_router = APIRouter(prefix="/api/admin")
-admin_router.include_router(user_manage_router, prefix="/user", tags=["管理员-用户管理"])
-admin_router.include_router(auditor_manage_router, prefix="/auditor", tags=["管理员-审核员管理"])
-admin_router.include_router(content_global_router, prefix="/content", tags=["管理员-内容全局管理"])
-admin_router.include_router(audit_manage_router, prefix="/audit", tags=["管理员-审核管理"])
-admin_router.include_router(system_config_router, prefix="/config", tags=["管理员-系统配置"])
-admin_router.include_router(system_audit_router, prefix="/audit/log", tags=["管理员-系统审计日志"])
-# 🔥 核心业务路由：课程管理
-admin_router.include_router(admin_course_router, prefix="/course", tags=["管理员-课程管理"])
-# 🔥 核心业务路由：知识点独立增删改查
-admin_router.include_router(admin_knowledge_router, prefix="/knowledge", tags=["管理员-知识点管理"])
-# 🔥 核心业务路由：知识点问答
-admin_router.include_router(admin_qa_router, prefix="/qa", tags=["管理员-知识点问答管理"])
+admin_router.include_router(user_manage_router, tags=["管理员-用户管理"])
+admin_router.include_router(auditor_manage_router, tags=["管理员-审核员管理"])
+admin_router.include_router(content_global_router, tags=["管理员-内容全局管理"])
+admin_router.include_router(audit_manage_router, tags=["管理员-审核管理"])
+admin_router.include_router(system_config_router, tags=["管理员-系统配置"])
+admin_router.include_router(system_audit_router, tags=["管理员-系统审计日志"])
+# 🔥 核心业务：课程/知识点/问答 路由（完整注册）
+admin_router.include_router(admin_course_router, tags=["管理员-课程管理"])
 
-# 注册管理员根路由
+
+# 注册管理员总路由
 app.include_router(admin_router)
 
-# 审核员接口（仅审核员可访问）
+# 审核员接口
 from api.auditor import audit_workbench_router, auditor_public_content_router
 auditor_router = APIRouter(prefix="/api/auditor")
-auditor_router.include_router(audit_workbench_router, prefix="/audit", tags=["审核员-审核工作台"])
-auditor_router.include_router(auditor_public_content_router, prefix="/content", tags=["审核员-公共内容查看"])
+auditor_router.include_router(audit_workbench_router, tags=["审核员-审核工作台"])
+auditor_router.include_router(auditor_public_content_router, tags=["审核员-公共内容查看"])
 app.include_router(auditor_router)
 
-# 普通用户接口（仅普通用户可访问）
+# 普通用户接口（✅ 修复：前缀统一管理，无重复）
 from api.user import user_router
-app.include_router(user_router, prefix="/api/user", tags=["普通用户-学习中心"])
+app.include_router(user_router, prefix="/api/user", tags=["普通用户接口总览"])
 
 # ==================== 健康检查接口 ====================
 @app.get("/health", summary="健康检查接口", response_model=ApiResponse)

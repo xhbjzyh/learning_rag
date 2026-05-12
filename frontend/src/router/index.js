@@ -82,10 +82,6 @@ router.beforeEach((to, from, next) => {
     next('/redirect')
     return
   }
-  if (to.meta.allowedRoles && !to.meta.allowedRoles.includes(userStore.roleId)) {
-    next('/redirect')
-    return
-  }
   next()
 })
 

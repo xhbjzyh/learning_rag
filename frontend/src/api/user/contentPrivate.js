@@ -29,21 +29,30 @@ request.interceptors.response.use((response) => {
   return Promise.reject(error)
 })
 
-// 接口定义（和你43-45行完全一致，无任何多余代码）
+// 接口定义（已修复路径重复问题）
 export default {
   getDocumentList() {
-    return request.get('/user/content/private/content/private/document/list')
+    return request.get('/user/content/private/document/list')
   },
   parseDocument(docId) {
-    return request.post(`/user/content/private/content/private/document/${docId}/parse`)
+    return request.post(`/user/content/private/document/${docId}/parse`)
   },
   getDocumentPoints(docId) {
-    return request.get(`/user/content/private/content/private/document/${docId}/points`)
+    return request.get(`/user/content/private/document/${docId}/points`)
   },
   deleteDocument(docId) {
-    return request.delete(`/user/content/private/content/private/document/${docId}`)
+    return request.delete(`/user/content/private/document/${docId}`)
   },
-  applyPublic(docId) {
-    return request.post(`/user/content/apply/content/apply/document/${docId}`)
+  applyPublic(docId, remark = '') {
+    // 🔥 修复：使用params传递查询参数，而不是拼接到URL
+    return request.post(
+      `/user/content/apply/document/${docId}`,
+      null,  // POST body为空
+      {
+        params: {
+          apply_remark: remark
+        }
+      }
+    )
   }
 }

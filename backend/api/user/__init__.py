@@ -8,29 +8,23 @@ from .content_private import router as content_private_router
 from .content_public import router as content_public_router
 from .content_apply import router as content_apply_router
 from .learning_center import router as learning_center_router
-from .personal_recommend import router as personal_recommend_router
 from .user_profile import router as user_profile_router
 from .personal_center import router as personal_center_router
 from .rag_chat import router as rag_chat_router
-from .exercise import router as exercise_router
-from .exercise_record import router as exercise_record_router
-from .course import router as course_router
+from .user_course import router as user_course_router  # 🔥 新增：导入合并后的课程路由
 
-# 统一用户端根路由
-user_router = APIRouter(prefix="/user")
+# 统一用户端根路由（去掉内部prefix，由main.py统一管理）
+user_router = APIRouter()
 
-# 注册所有子路由（各自的prefix会自动叠加）
-user_router.include_router(content_private_router)
-user_router.include_router(content_public_router)
-user_router.include_router(content_apply_router)
-user_router.include_router(learning_center_router)
-user_router.include_router(personal_recommend_router)
-user_router.include_router(user_profile_router)
-user_router.include_router(personal_center_router)
-user_router.include_router(rag_chat_router)
-user_router.include_router(exercise_router)
-user_router.include_router(exercise_record_router)
-user_router.include_router(course_router)
+# 注册所有子路由 + 清晰的Swagger分类标签
+user_router.include_router(content_private_router, tags=["用户-私有内容管理"])
+user_router.include_router(content_public_router, tags=["用户-公共内容浏览"])
+user_router.include_router(content_apply_router, tags=["用户-内容公开申请"])
+user_router.include_router(learning_center_router, tags=["用户-学习中心"])
+user_router.include_router(user_profile_router, tags=["用户-学习画像"])
+user_router.include_router(personal_center_router, tags=["用户-个人中心"])
+user_router.include_router(rag_chat_router, tags=["用户-AI智能问答"])
+user_router.include_router(user_course_router, tags=["用户-课程学习"])  # 🔥 注册合并后的课程路由
 
 # 只导出统一的user_router
 __all__ = ["user_router"]

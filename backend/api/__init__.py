@@ -17,7 +17,7 @@ from .user import (
     content_public_router,
     content_apply_router,
     learning_center_router,
-    personal_recommend_router,
+
     user_profile_router,
     personal_center_router,
     rag_chat_router
@@ -37,7 +37,7 @@ __all__ = [
     "content_public_router",
     "content_apply_router",
     "learning_center_router",
-    "personal_recommend_router",
+
     "user_profile_router",
     "personal_center_router",
     "rag_chat_router"
