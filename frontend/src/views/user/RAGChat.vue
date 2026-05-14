@@ -1,84 +1,155 @@
 <template>
   <div class="rag-chat">
-    <div class="chat-container">
-      <!-- 聊天消息区 -->
-      <div class="chat-messages" ref="messagesRef">
-        <el-empty v-if="messages.length === 0" description="开始你的RAG问答之旅吧！" />
+    <!-- 🔥 左侧：聊天区域 -->
+    <div class="chat-section">
+      <div class="chat-container">
+        <!-- 聊天消息区 -->
+        <div class="chat-messages" ref="messagesRef">
+          <el-empty v-if="messages.length === 0" description="开始你的RAG问答之旅吧！" />
 
-        <div
-          v-for="(msg, index) in messages"
-          :key="index"
-          class="message-item"
-          :class="msg.role"
-        >
-          <div class="message-avatar">
-            <el-icon v-if="msg.role === 'user'" :size="24"><User /></el-icon>
-            <el-icon v-else :size="24" color="#409EFF"><Platform /></el-icon>
+          <div
+            v-for="(msg, index) in messages"
+            :key="index"
+            class="message-item"
+            :class="msg.role"
+          >
+            <div class="message-avatar">
+              <el-icon v-if="msg.role === 'user'" :size="24"><User /></el-icon>
+              <el-icon v-else :size="24" color="#409EFF"><Platform /></el-icon>
+            </div>
+            <div class="message-content">
+              <div class="message-bubble" v-html="msg.content"></div>
+              <div class="message-time">{{ msg.time }}</div>
+            </div>
           </div>
-          <div class="message-content">
-            <div class="message-bubble" v-html="msg.content"></div>
-            <div class="message-time">{{ msg.time }}</div>
-          </div>
-        </div>
 
-        <div v-if="isStreaming" class="message-item assistant">
-          <div class="message-avatar">
-            <el-icon :size="24" color="#409EFF"><Platform /></el-icon>
-          </div>
-          <div class="message-content">
-            <div class="message-bubble">
-              {{ streamingContent }}
-              <span class="cursor">|</span>
+          <div v-if="isStreaming" class="message-item assistant">
+            <div class="message-avatar">
+              <el-icon :size="24" color="#409EFF"><Platform /></el-icon>
+            </div>
+            <div class="message-content">
+              <div class="message-bubble">
+                {{ streamingContent }}
+                <span class="cursor">|</span>
+              </div>
             </div>
           </div>
         </div>
-      </div>
 
-      <!-- 顶部工具栏：私有 + 公共知识库按钮（但只保留私有抽屉） -->
-      <div class="kb-switch">
-        <div class="btn-group">
-          <el-button type="primary" size="small" @click="privateDrawerVisible = true">
-            <el-icon><Folder /></el-icon> 私有知识库
-          </el-button>
-          <el-button type="success" size="small" disabled>
-            <el-icon><Document /></el-icon> 公共知识库
+        <!-- 顶部工具栏 -->
+        <div class="kb-switch">
+          <div class="btn-group">
+            <el-button type="primary" size="small" @click="privateDrawerVisible = true">
+              <el-icon><Folder /></el-icon> 私有知识库
+            </el-button>
+            <el-button type="success" size="small" disabled>
+              <el-icon><Document /></el-icon> 公共知识库
+            </el-button>
+          </div>
+
+          <el-radio-group v-model="kbType" size="small">
+            <el-radio label="private">私有知识库</el-radio>
+            <el-radio label="public">公共知识库</el-radio>
+          </el-radio-group>
+
+          <el-button type="text" @click="handleClearHistory" :disabled="isStreaming">
+            清除历史
           </el-button>
         </div>
 
-        <el-radio-group v-model="kbType" size="small">
-          <el-radio label="private">私有知识库</el-radio>
-          <el-radio label="public">公共知识库</el-radio>
-        </el-radio-group>
-
-        <el-button type="text" @click="handleClearHistory" :disabled="isStreaming">
-          清除历史
-        </el-button>
-      </div>
-
-      <!-- 输入区 -->
-      <div class="chat-input">
-        <el-input
-          v-model="query"
-          type="textarea"
-          :rows="3"
-          placeholder="请输入你的问题..."
-          :disabled="isStreaming"
-          @keyup.ctrl.enter="handleSend"
-        />
-        <div class="input-actions">
-          <span class="input-tip">按 Ctrl+Enter 发送</span>
-          <el-button
-            type="primary"
-            :loading="isStreaming"
-            @click="handleSend"
-          >
-            {{ isStreaming ? '回答中...' : '发送' }}
-          </el-button>
+        <!-- 输入区 -->
+        <div class="chat-input">
+          <el-input
+            v-model="query"
+            type="textarea"
+            :rows="3"
+            placeholder="请输入你的问题..."
+            :disabled="isStreaming"
+            @keyup.ctrl.enter="handleSend"
+          />
+          <div class="input-actions">
+            <span class="input-tip">按 Ctrl+Enter 发送</span>
+            <el-button
+              type="primary"
+              :loading="isStreaming"
+              @click="handleSend"
+            >
+              {{ isStreaming ? '回答中...' : '发送' }}
+            </el-button>
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- ====================== 1. 私有知识库抽屉 ====================== -->
+    <!-- 🔥 右侧：个性化推荐侧边栏（始终显示） -->
+    <div class="recommendation-sidebar">
+      <el-card shadow="hover" class="auto-recommend-card">
+        <template #header>
+          <div class="card-header">
+            <span>💡 为你推荐</span>
+            <el-tag size="small" type="success" v-if="recommendations.length > 0">
+              实时更新
+            </el-tag>
+          </div>
+        </template>
+
+        <div v-loading="loadingRecommendations" class="recommendation-list">
+          <div
+            v-for="(rec, index) in recommendations"
+            :key="rec.course_id"
+            class="recommendation-item"
+            @click="goToCourse(rec.course_id)"
+          >
+            <div class="item-rank">{{ index + 1 }}</div>
+            <img :src="rec.cover_url || defaultCover" class="course-cover" />
+            <div class="course-info">
+              <h4>{{ rec.course_title }}</h4>
+              <p class="reason" v-if="rec.reason">
+                <el-icon><ChatDotRound /></el-icon>
+                {{ rec.reason }}
+              </p>
+              <div class="meta">
+                <el-tag size="small" :type="getScoreType(rec.score)">
+                  匹配度 {{ rec.score }}%
+                </el-tag>
+                <el-tag size="small" type="info" v-if="rec.recommend_type">
+                  {{ getRecommendTypeText(rec.recommend_type) }}
+                </el-tag>
+              </div>
+            </div>
+          </div>
+
+          <el-empty
+            v-if="!loadingRecommendations && recommendations.length === 0"
+            description="完成一些学习后，我会为你推荐课程"
+            :image-size="80"
+          />
+        </div>
+      </el-card>
+
+      <!-- 🔥 学习进度概览 -->
+      <el-card shadow="hover" class="progress-card" v-if="learningStats">
+        <template #header>
+          <span>📊 本周学习</span>
+        </template>
+        <div class="stats-content">
+          <div class="stat-item">
+            <span class="label">学习时长</span>
+            <span class="value">{{ formatDuration(learningStats.total_duration) }}</span>
+          </div>
+          <div class="stat-item">
+            <span class="label">掌握知识点</span>
+            <span class="value">{{ learningStats.mastered_points }} 个</span>
+          </div>
+          <div class="stat-item">
+            <span class="label">连续学习</span>
+            <span class="value">{{ learningStats.consecutive_days }} 天</span>
+          </div>
+        </div>
+      </el-card>
+    </div>
+
+    <!-- ====================== 原有抽屉和弹窗（保持不变） ====================== -->
     <el-drawer v-model="privateDrawerVisible" title="私有知识库" direction="rtl" size="45%" :destroy-on-close="true">
       <div class="knowledge-drawer-content">
         <div class="drawer-header">
@@ -142,7 +213,6 @@
       </div>
     </el-drawer>
 
-    <!-- 上传弹窗（私有） -->
     <el-dialog v-model="showUploadDialog" title="上传私有文档" width="500px" @open="loadCategoryList" @close="resetUploadForm">
       <el-form :model="uploadForm" label-width="80px">
         <el-form-item label="文档标题" required>
@@ -165,7 +235,6 @@
       </template>
     </el-dialog>
 
-    <!-- 知识点查看抽屉 -->
     <el-drawer v-model="pointsDrawerVisible" title="文档知识点" direction="rtl" size="40%">
       <div v-if="currentDoc" class="points-detail">
         <h3>{{ currentDoc.title }}</h3>
@@ -175,7 +244,6 @@
         </div>
       </div>
     </el-drawer>
-
   </div>
 </template>
 
@@ -183,12 +251,18 @@
 import ragApi from '@/api/user/rag'
 import contentPrivateApi from '@/api/user/contentPrivate'
 import contentPublicApi from '@/api/user/contentPublic'
-import { ref, nextTick, onMounted, watch } from 'vue'  // 🔥 添加 watch
+import { ref, nextTick, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { User, Platform, Folder, Document, Plus, Loading } from '@element-plus/icons-vue'
+import { User, Platform, Folder, Document, Plus, Loading, ChatDotRound } from '@element-plus/icons-vue'
 import { formatDate } from '@/utils/format'
 import axios from 'axios'
 import { getToken } from '@/utils/storage'
+import learningSessionTracker from '@/utils/learningSession'
+import { useRoute, useRouter } from 'vue-router'
+import { getSmartRecommendations, getUserBehaviorAnalysis } from '@/api/user/userProfile'
+
+const route = useRoute()
+const router = useRouter()
 
 // -------------------------- 聊天基础 --------------------------
 const messagesRef = ref(null)
@@ -200,6 +274,12 @@ const kbType = ref('private')
 const messages = ref([
   { role: 'assistant', content: '你好！我是RAG智能学习助手~', time: formatDate(new Date(), 'HH:mm:ss') }
 ])
+
+// 🔥 新增：推荐相关
+const recommendations = ref([])
+const learningStats = ref(null)
+const loadingRecommendations = ref(false)
+const defaultCover = 'https://via.placeholder.com/80x60?text=课程'
 
 const scrollToBottom = () => nextTick(() => {
   if (messagesRef.value) messagesRef.value.scrollTop = messagesRef.value.scrollHeight
@@ -214,6 +294,13 @@ const handleClearHistory = async () => {
 
 const handleSend = async () => {
   if (!query.value) return ElMessage.warning('请输入问题')
+
+  // 🔥 如果有知识点ID，开始跟踪学习会话
+  const pointId = route.query.point_id ? parseInt(route.query.point_id) : null
+  if (pointId) {
+    learningSessionTracker.startSession(pointId)
+  }
+
   const userMsg = { role: 'user', content: query.value, time: formatDate(new Date(), 'HH:mm:ss') }
   messages.value.push(userMsg)
   const q = query.value
@@ -240,15 +327,86 @@ const handleSend = async () => {
       content: streamingContent.value.replace(/\n/g, '<br>'),
       time: formatDate(new Date(), 'HH:mm:ss')
     })
+
+    // 🔥 问答完成后结束学习会话
+    if (pointId) {
+      await learningSessionTracker.endSession({
+        isMastered: false,
+        sessionType: 'review',
+        notes: q
+      })
+    }
+
+    // 🔥 自动刷新推荐（异步，不阻塞）
+    loadRecommendations()
+
   } catch (e) {
     ElMessage.error('请求失败')
+
+    // 🔥 即使失败也要结束会话
+    if (pointId) {
+      learningSessionTracker.endSession()
+    }
   } finally {
     isStreaming.value = false
     streamingContent.value = ''
   }
 }
 
-// -------------------------- 私有知识库 --------------------------
+// 🔥 新增：加载推荐
+const loadRecommendations = async () => {
+  loadingRecommendations.value = true
+  try {
+    const res = await getSmartRecommendations(3)
+    if (res.code === 0) {
+      recommendations.value = res.data
+    }
+
+    // 同时加载学习统计
+    const statsRes = await getUserBehaviorAnalysis()
+    if (statsRes.code === 0) {
+      learningStats.value = statsRes.data
+    }
+  } catch (error) {
+    console.error('加载推荐失败:', error)
+  } finally {
+    loadingRecommendations.value = false
+  }
+}
+
+// 🔥 新增：跳转到课程
+const goToCourse = (courseId) => {
+  router.push(`/user/course/${courseId}`)
+}
+
+// 🔥 新增：获取分数类型
+const getScoreType = (score) => {
+  if (score >= 80) return 'success'
+  if (score >= 60) return 'warning'
+  return 'danger'
+}
+
+// 🔥 新增：获取推荐类型文本
+const getRecommendTypeText = (type) => {
+  const map = {
+    weak_point: '薄弱加强',
+    interest_based: '兴趣匹配',
+    learning_path: '学习路径',
+    hot: '热门课程'
+  }
+  return map[type] || '推荐'
+}
+
+// 🔥 新增：格式化时长
+const formatDuration = (seconds) => {
+  if (!seconds) return '0分钟'
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  if (hours > 0) return `${hours}小时${minutes}分钟`
+  return `${minutes}分钟`
+}
+
+// -------------------------- 私有知识库（原有代码保持不变） --------------------------
 const privateDrawerVisible = ref(false)
 const privateLoading = ref(false)
 const privateDocList = ref([])
@@ -267,7 +425,7 @@ const loadPrivateDocs = async () => {
   const res = await contentPrivateApi.getDocumentList()
   privateDocList.value = (res.data || []).map(doc => ({
     ...doc,
-    parsing: false  // 添加解析状态标记
+    parsing: false
   }))
   privateLoading.value = false
 }
@@ -287,13 +445,10 @@ const parseDocument = async (doc) => {
       type: 'info'
     })
 
-    // 设置解析中状态
     doc.parsing = true
-
     const res = await contentPrivateApi.parseDocument(doc.id)
     const result = res.data
 
-    // 显示结果
     if (result.failed_chunks && result.failed_chunks.length > 0) {
       ElMessage.warning({
         message: `解析完成！成功 ${result.points_count} 个知识点，${result.failed_chunks.length} 个块失败。可点击「重试」重新解析失败部分。`,
@@ -303,7 +458,6 @@ const parseDocument = async (doc) => {
       ElMessage.success(`文档解析成功！共提取 ${result.points_count} 个知识点`)
     }
 
-    // 重新加载文档列表
     await loadPrivateDocs()
   } catch (error) {
     if (error !== 'cancel') {
@@ -332,7 +486,6 @@ const applyPublic = async (doc) => {
 
     ElMessage.success('申请提交成功，请等待审核！')
 
-    // 更新本地状态
     doc.is_public = 1
   } catch (error) {
     if (error !== 'cancel') {
@@ -357,12 +510,11 @@ const deletePrivateDoc = async (doc) => {
 
 const formatContent = (c) => c?.replace(/\n/g, '<br>') || ''
 
-// 🔥 新增: 组件挂载时预加载分类列表(用于上传弹窗)
 onMounted(() => {
   loadCategoryList()
+  loadRecommendations()  // 🔥 新增：加载推荐
 })
 
-// 🔥 新增：获取处理状态文本
 const getProcessStatusText = (status) => {
   const statusMap = {
     0: '待处理',
@@ -373,13 +525,12 @@ const getProcessStatusText = (status) => {
   return statusMap[status] || '未知'
 }
 
-// 🔥 新增：获取处理状态标签类型
 const getProcessStatusType = (status) => {
   const typeMap = {
-    0: 'info',      // 待处理 - 灰色
-    1: 'warning',   // 解析中 - 橙色
-    2: 'success',   // 已解析 - 绿色
-    3: 'danger'     // 解析失败 - 红色
+    0: 'info',
+    1: 'warning',
+    2: 'success',
+    3: 'danger'
   }
   return typeMap[status] || ''
 }
@@ -403,7 +554,6 @@ const submitUpload = async () => {
     ElMessage.success('上传成功')
     showUploadDialog.value = false
 
-    // 🔥 修复：如果抽屉已打开，重新加载；否则等待下次打开时加载
     if (privateDrawerVisible.value) {
       await loadPrivateDocs()
     }
@@ -414,7 +564,6 @@ const submitUpload = async () => {
   }
 }
 
-// 🔥 新增：监听抽屉打开事件，自动加载数据
 watch(privateDrawerVisible, (newVal) => {
   if (newVal) {
     loadPrivateDocs()
@@ -424,8 +573,31 @@ watch(privateDrawerVisible, (newVal) => {
 </script>
 
 <style scoped>
-.rag-chat { width: 100%; height: 100%; display: flex; justify-content: center; background: #f0f2f5; }
-.chat-container { width: 100%; max-width: 900px; height: 100%; display: flex; flex-direction: column; background: #fff; }
+/* 🔥 修改：整体布局改为左右分栏 */
+.rag-chat {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  gap: 20px;
+  padding: 20px;
+  background: #f0f2f5;
+}
+
+.chat-section {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-container {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+}
+
 .chat-messages { flex: 1; padding: 20px; overflow-y: auto; }
 .message-item { display: flex; margin-bottom: 15px; }
 .message-item.user { flex-direction: row-reverse; }
@@ -439,7 +611,119 @@ watch(privateDrawerVisible, (newVal) => {
 .chat-input { padding:20px; border-top:1px solid #eee; }
 .input-actions { display:flex; justify-content:space-between; margin-top:10px; }
 
-/* 抽屉样式 */
+/* 🔥 新增：推荐侧边栏样式 */
+.recommendation-sidebar {
+  width: 350px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+}
+
+.auto-recommend-card {
+  flex-shrink: 0;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.recommendation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.recommendation-item {
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.3s;
+  border: 1px solid #ebeef5;
+}
+
+.recommendation-item:hover {
+  background: #f5f7fa;
+  border-color: #409eff;
+  transform: translateX(4px);
+}
+
+.item-rank {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #409eff;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: bold;
+  flex-shrink: 0;
+}
+
+.course-cover {
+  width: 80px;
+  height: 60px;
+  object-fit: cover;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.course-info h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.reason {
+  font-size: 12px;
+  color: #666;
+  margin: 0 0 8px;
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.reason .el-icon {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.stats-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.stat-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.stat-item .label {
+  font-size: 13px;
+  color: #666;
+}
+
+.stat-item .value {
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+}
+
+/* 原有抽屉样式保持不变 */
 .knowledge-drawer-content { height:100%; display:flex; flex-direction:column; }
 .drawer-header { display:flex; justify-content:space-between; margin-bottom:15px; padding-bottom:10px; border-bottom:1px solid #eee; }
 .doc-list { flex:1; overflow-y:auto; }

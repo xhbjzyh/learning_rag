@@ -4,7 +4,7 @@
     <div class="course-header">
       <div class="header-content">
         <div class="course-cover">
-          <img :src="courseDetail.cover_url || defaultCover" :alt="courseDetail.title" />
+          <img :src="getFullImageUrl(courseDetail.cover_url)" :alt="courseDetail.title" />
         </div>
         <div class="course-info">
           <h1 class="course-title">{{ courseDetail.title }}</h1>
@@ -228,8 +228,14 @@
     </div>
 
     <!-- 视频播放弹窗 -->
-    <el-dialog v-model="videoDialogVisible" title="视频学习" width="90%" :close-on-click-modal="false">
-      <div v-if="currentVideo" class="video-player">
+    <el-dialog
+      v-model="videoDialogVisible"
+      title="视频学习"
+      width="90%"
+      :close-on-click-modal="false"
+      @closed="handleVideoDialogClosed"
+    >
+      <div v-if="currentVideo && videoDialogVisible" class="video-player">
         <video
           ref="videoRef"
           :src="`http://127.0.0.1:8000${currentVideo.url}`"
@@ -274,6 +280,25 @@
           <el-tag type="info">{{ formatExerciseType(currentExercise.type) }}</el-tag>
           <span>分值：{{ currentExercise.score || 0 }}分</span>
         </div>
+
+        <!-- 🔥 新增：答题结果显示区域 -->
+        <div v-if="submitResult" class="submit-result" :class="submitResult.is_correct ? 'correct' : 'wrong'">
+          <div class="result-header">
+            <el-icon v-if="submitResult.is_correct" :size="24" color="#67c23a"><CircleCheck /></el-icon>
+            <el-icon v-else :size="24" color="#f56c6c"><CircleClose /></el-icon>
+            <span class="result-text">
+              {{ submitResult.is_correct ? '回答正确！' : '回答错误' }}
+            </span>
+            <span v-if="!submitResult.is_correct" class="correct-answer">
+              正确答案：{{ submitResult.correct_answer }}
+            </span>
+          </div>
+          <div v-if="submitResult.analysis" class="result-analysis">
+            <p class="analysis-title">📖 答案解析：</p>
+            <p class="analysis-content">{{ submitResult.analysis }}</p>
+          </div>
+        </div>
+
         <div class="exercise-answer">
           <el-input
             v-if="currentExercise.type === 'short_answer'"
@@ -281,8 +306,9 @@
             type="textarea"
             :rows="5"
             placeholder="请输入答案"
+            :disabled="!!submitResult"
           />
-          <el-radio-group v-else-if="currentExercise.type === 'single_choice'" v-model="userAnswer">
+          <el-radio-group v-else-if="currentExercise.type === 'single_choice'" v-model="userAnswer" :disabled="!!submitResult">
             <el-radio
               :label="opt.option_label"
               v-for="(opt, idx) in currentExercise.options"
@@ -291,7 +317,7 @@
               {{ opt.option_label }}. {{ opt.option_content }}
             </el-radio>
           </el-radio-group>
-          <el-checkbox-group v-else-if="currentExercise.type === 'multiple_choice'" v-model="userAnswer">
+          <el-checkbox-group v-else-if="currentExercise.type === 'multiple_choice'" v-model="userAnswer" :disabled="!!submitResult">
             <el-checkbox
               :label="opt.id"
               v-for="(opt, idx) in currentExercise.options"
@@ -303,8 +329,9 @@
         </div>
       </div>
       <template #footer>
-        <el-button @click="closeExerciseDialog">取消</el-button>
-        <el-button type="success" @click="submitExercise">提交答案</el-button>
+        <el-button @click="closeExerciseDialog">关闭</el-button>
+        <el-button v-if="!submitResult" type="success" @click="submitExercise">提交答案</el-button>
+        <el-button v-else type="primary" @click="nextExercise">下一题</el-button>
       </template>
     </el-dialog>
 
@@ -318,17 +345,28 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { User, View, VideoPlay, Document, ArrowLeft, Notebook, TrendCharts, DataAnalysis, Refresh, ChatDotRound } from '@element-plus/icons-vue'
 import courseApi from '@/api/user/course.js'
+import learningSessionTracker from '@/utils/learningSession'
 
 const router = useRouter()
 const route = useRoute()
 
 // 默认封面
 const defaultCover = 'https://via.placeholder.com/400x300?text=课程封面'
+
+// 🔥 新增：获取完整的图片URL
+const getFullImageUrl = (url) => {
+  if (!url) return defaultCover
+  // 如果已经是完整URL，直接返回
+  if (url.startsWith('http')) return url
+  // 否则拼接基础URL
+  const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+  return `${baseUrl}${url}`
+}
 
 // 核心数据
 const courseDetail = ref({})
@@ -348,6 +386,7 @@ const currentKnowledge = ref(null)
 const exerciseDialogVisible = ref(false)
 const currentExercise = ref(null)
 const userAnswer = ref('')
+const submitResult = ref(null)  // 🔥 新增：存储提交结果
 const lastReportedProgress = ref(null)
 const lastReportedTime = ref(null)
 
@@ -496,8 +535,38 @@ const startLearning = () => {
 
 // 播放视频
 const playVideo = (resource) => {
+  console.log('🔥🔥🔥 playVideo 被调用', resource)
+  console.log('🔥 courseDetail.value:', courseDetail.value)
+  console.log('🔥 knowledge_points:', courseDetail.value.knowledge_points)
+  console.log('🔥 course_knowledge_points:', courseDetail.value.course_knowledge_points)
+
   currentVideo.value = resource
   videoDialogVisible.value = true
+
+  // 🔥 修复：开始跟踪学习会话
+  let pointId = null
+
+  // 优先使用知识点ID
+  if (courseDetail.value.knowledge_points && courseDetail.value.knowledge_points.length > 0) {
+    pointId = courseDetail.value.knowledge_points[0].id
+    console.log('🔥 使用 knowledge_points[0].id:', pointId)
+  } else if (courseDetail.value.course_knowledge_points && courseDetail.value.course_knowledge_points.length > 0) {
+    pointId = courseDetail.value.course_knowledge_points[0].id
+    console.log('🔥 使用 course_knowledge_points[0].id:', pointId)
+  } else {
+    // 🔥 兜底方案：使用课程ID作为临时知识点ID
+    pointId = courseDetail.value.id
+    console.warn('⚠️ 未找到知识点，使用课程ID作为临时ID:', pointId)
+  }
+
+  console.log('🔥 准备启动学习会话，pointId:', pointId)
+  console.log('🔥 当前 tracker 状态:', learningSessionTracker)
+  learningSessionTracker.startSession(pointId)
+  console.log('🔥 startSession 调用后状态:', {
+    isTracking: learningSessionTracker.isTracking,
+    currentPointId: learningSessionTracker.currentPointId,
+    sessionStartTime: learningSessionTracker.sessionStartTime
+  })
 }
 
 // 视频进度更新
@@ -545,6 +614,8 @@ const handleVideoTimeUpdate = async () => {
 
 // 视频结束
 const handleVideoEnded = async () => {
+  console.log('🔥 视频播放结束')
+
   try {
     const duration = videoRef.value?.duration || 0;
 
@@ -559,6 +630,14 @@ const handleVideoEnded = async () => {
       watch_position: Math.floor(duration),  // 🔥 传递总时长
       study_duration: lastDuration  // 🔥 最后一段时长
     });
+
+    // 🔥 新增：视频学习完成，标记为已掌握
+    console.log('🔥 视频学习完成，结束学习会话')
+    await learningSessionTracker.endSession({
+      isMastered: true,
+      sessionType: 'study'
+    });
+
     ElMessage.success("学习完成");
 
     // 🔥 刷新课程详情，更新进度显示
@@ -570,24 +649,81 @@ const handleVideoEnded = async () => {
 
 // 关闭视频弹窗
 const closeVideoDialog = () => {
+  console.log('🔥 closeVideoDialog 被调用')
+
+  // 🔥 关键修复：先暂停并重置视频播放器
+  if (videoRef.value) {
+    videoRef.value.pause()
+    videoRef.value.currentTime = 0
+    console.log('视频已暂停并重置')
+  }
+
+  // 结束学习会话
+  console.log('🔥 当前会话状态:', learningSessionTracker)
+  learningSessionTracker.endSession({
+    isMastered: false,
+    sessionType: 'study'
+  })
+
+  // 🔥 直接关闭弹窗，v-if 会自动销毁视频元素
   videoDialogVisible.value = false
   currentVideo.value = null
+
+  // 重新加载课程详情以更新进度
   loadCourseDetail()
 }
 
-// 打开资源
+// 🔥 新增：弹窗完全关闭后的回调（确保视频元素已销毁）
+const handleVideoDialogClosed = () => {
+  console.log('视频弹窗已完全关闭，视频元素已销毁')
+  // 清空引用
+  videoRef.value = null
+  lastReportedTime.value = null
+  lastReportedProgress.value = null
+}
+
+// 打开资源（文档/书籍）
 const openResource = (resource) => {
+  // 🔥 新增：开始跟踪文档学习会话
+  if (courseDetail.value.knowledge_points && courseDetail.value.knowledge_points.length > 0) {
+    const firstPointId = courseDetail.value.knowledge_points[0].id
+    learningSessionTracker.startSession(firstPointId)
+  } else if (courseDetail.value.course_knowledge_points && courseDetail.value.course_knowledge_points.length > 0) {
+    const firstPointId = courseDetail.value.course_knowledge_points[0].id
+    learningSessionTracker.startSession(firstPointId)
+  }
+
   window.open(resource.url, '_blank')
+
+  // 🔥 提示用户关闭文档后会自动记录学习时长
+  ElMessage.info('请在学习完成后关闭文档窗口，系统将自动记录学习时长')
+
+  // 🔥 监听窗口关闭事件（5秒后检查一次）
+  setTimeout(() => {
+    learningSessionTracker.endSession({
+      isMastered: false,
+      sessionType: 'study'
+    })
+  }, 5000)
 }
 
 // 打开知识点详情
 const openKnowledge = (kp) => {
   currentKnowledge.value = kp
   knowledgeDialogVisible.value = true
+
+  // 🔥 新增：开始跟踪知识点学习会话
+  learningSessionTracker.startSession(kp.id)
 }
 
 // 跳转到知识点问答
 const goToKnowledge = (pointId) => {
+  // 🔥 结束当前学习会话
+  learningSessionTracker.endSession({
+    isMastered: false,
+    sessionType: 'study'
+  })
+
   router.push(`/rag?point_id=${pointId}`)
   knowledgeDialogVisible.value = false
 }
@@ -602,6 +738,13 @@ const openExercise = async (exercise) => {
   }
   userAnswer.value = currentExercise.value.type === 'multiple_choice' ? [] : ''
   exerciseDialogVisible.value = true
+
+  // 🔥 新增：开始跟踪习题练习会话
+  // 习题可能关联多个知识点，取第一个
+  if (currentExercise.value.knowledge_points && currentExercise.value.knowledge_points.length > 0) {
+    const firstPointId = currentExercise.value.knowledge_points[0].id
+    learningSessionTracker.startSession(firstPointId)
+  }
 }
 
 // 关闭习题弹窗
@@ -609,6 +752,7 @@ const closeExerciseDialog = () => {
   exerciseDialogVisible.value = false
   currentExercise.value = null
   userAnswer.value = ''
+  submitResult.value = null  // 🔥 重置提交结果
 }
 
 // 提交习题答案
@@ -629,22 +773,31 @@ const submitExercise = async () => {
     if (res.code === 0) {
       const result = res.data
 
-      // 构建结果消息
-      let message = ''
-      if (result.is_correct) {
-        message = `✅ 回答正确！得分：${result.score}分`
-      } else {
-        message = `❌ 回答错误！正确答案：${result.correct_answer}`
+      // 🔥 修复：保存提交结果（在对话框中显示）
+      submitResult.value = {
+        is_correct: result.is_correct,
+        correct_answer: result.correct_answer,
+        analysis: result.analysis,
+        score: result.score
       }
 
-      // 关闭答题弹窗
-      exerciseDialogVisible.value = false
+      // 🔥 新增：根据答题结果结束学习会话
+      await learningSessionTracker.endSession({
+        isMastered: result.is_correct,
+        sessionType: 'practice'
+      })
 
-      // 显示结果和解析
+      // 🔥 修复：不再立即关闭对话框，让用户看到结果
+      // exerciseDialogVisible.value = false
+
+      // 🔥 可选：仍然显示弹窗提示（但延迟更久）
       setTimeout(() => {
         ElMessageBox.alert(
           `<div style="text-align: left;">
-            <p style="font-size: 16px; font-weight: bold; margin-bottom: 15px;">${message}</p>
+            <p style="font-size: 16px; font-weight: bold; margin-bottom: 15px;">
+              ${result.is_correct ? '✅ 回答正确！' : '❌ 回答错误'}
+              ${result.is_correct ? `得分：${result.score}分` : `正确答案：${result.correct_answer}`}
+            </p>
             ${result.analysis ? `
               <div style="margin-top: 15px; padding: 12px; background: #f5f7fa; border-radius: 4px;">
                 <p style="margin: 0 0 8px; font-weight: 600; color: #409eff;">📖 答案解析：</p>
@@ -663,13 +816,30 @@ const submitExercise = async () => {
             }
           }
         )
-      }, 300)
+      }, 500)
     } else {
       ElMessage.error(res.msg || '提交失败')
     }
   } catch (error) {
     console.error('提交答案失败:', error)
     ElMessage.error('提交失败，请稍后重试')
+  }
+}
+
+// 🔥 新增：下一题
+const nextExercise = () => {
+  // 关闭当前对话框
+  exerciseDialogVisible.value = false
+  submitResult.value = null
+
+  // 找到当前习题的索引
+  const currentIndex = exerciseList.value.findIndex(ex => ex.id === currentExercise.value.id)
+
+  // 如果有下一题，打开它
+  if (currentIndex >= 0 && currentIndex < exerciseList.value.length - 1) {
+    openExercise(exerciseList.value[currentIndex + 1])
+  } else {
+    ElMessage.info('已经是最后一题了')
   }
 }
 
@@ -741,9 +911,16 @@ watch(() => activeTab.value, (newVal) => {
   }
 })
 
-// 初始化加载
+// 页面卸载时自动保存学习会话
+onUnmounted(() => {
+  learningSessionTracker.endSession()
+})
+
+// 页面初始化
 onMounted(() => {
   loadCourseDetail()
+  loadRecommendations()
+  loadMastery()
 })
 </script>
 
@@ -1121,4 +1298,59 @@ onMounted(() => {
 .exercise-detail { padding: 10px 0; }
 .exercise-info { margin: 10px 0 20px; display: flex; gap: 10px; align-items: center; }
 .exercise-answer { margin-top: 20px; padding: 16px; background: #f8f9fa; border-radius: 8px; }
+
+/* 🔥 新增：答题结果显示样式 */
+.submit-result {
+  margin: 20px 0;
+  padding: 16px;
+  border-radius: 8px;
+  border-left: 4px solid;
+}
+
+.submit-result.correct {
+  background: #f0f9ff;
+  border-color: #67c23a;
+}
+
+.submit-result.wrong {
+  background: #fef0f0;
+  border-color: #f56c6c;
+}
+
+.result-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.result-text {
+  font-size: 16px;
+  font-weight: bold;
+  flex: 1;
+}
+
+.correct-answer {
+  color: #f56c6c;
+  font-weight: 600;
+}
+
+.result-analysis {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #e4e7ed;
+}
+
+.analysis-title {
+  margin: 0 0 8px;
+  font-weight: 600;
+  color: #409eff;
+}
+
+.analysis-content {
+  margin: 0;
+  line-height: 1.8;
+  color: #606266;
+  white-space: pre-wrap;
+}
 </style>

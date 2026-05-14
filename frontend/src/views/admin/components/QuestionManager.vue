@@ -259,18 +259,21 @@ const submitForm = async () => {
     }
 
     const params = {
+      id: form.id, // 🔥 编辑时必须包含id（后端必填）
       title: form.title,
       type: form.type,
       difficulty: form.difficulty,
       analysis: form.analysis || null,
       knowledge_ids: parseIds(form.knowledge_ids),
       course_knowledge_ids: parseIds(form.course_knowledge_ids),
-      options: form.options.map((opt, index) => ({
-        option_label: opt.option_label,
-        option_content: opt.option_content,
-        is_correct: opt.is_correct,
-        order: index + 1
-      }))
+      options: (form.type === 'single_choice' || form.type === 'multiple_choice')
+        ? form.options.map((opt, index) => ({
+            option_label: opt.option_label,
+            option_content: opt.option_content,
+            is_correct: opt.is_correct,
+            order: index + 1
+          }))
+        : [] // 判断题不需要选项
     }
 
     console.log('提交的参数:', params) // 调试日志

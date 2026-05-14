@@ -208,14 +208,28 @@ class LearningCenterService:
     def get_user_learning_stats(db: Session, user_id: int):
         """
         获取用户学习统计数据
-        🔥 修复：从 user_resource_progress 表读取视频/文档学习时长
+        🔥 修复：从多个数据源汇总学习时长，与个人中心保持一致
         """
-        from models.db_models import UserResourceProgress, CourseResource
+        from models.db_models import UserResourceProgress, CourseResource, LearningProgress, UserLearningRecord
         
-        # 🔥 核心修复：从 user_resource_progress 读取总学习时长
-        total_duration = db.query(func.sum(UserResourceProgress.total_study_duration)).filter(
+        # 🔥 核心修复：从多个数据源汇总学习时长（取最大值，避免重复计算）
+        # 1. 从 user_resource_progress 获取视频/文档学习时长
+        resource_duration = db.query(func.sum(UserResourceProgress.total_study_duration)).filter(
             UserResourceProgress.user_id == user_id
         ).scalar() or 0
+        
+        # 2. 从 learning_progress 获取知识点学习时长  
+        learning_duration = db.query(func.sum(LearningProgress.study_duration)).filter(
+            LearningProgress.user_id == user_id
+        ).scalar() or 0
+        
+        # 3. 从 user_learning_record 获取学习记录时长
+        record_duration = db.query(func.sum(UserLearningRecord.learn_duration)).filter(
+            UserLearningRecord.user_id == user_id
+        ).scalar() or 0
+        
+        # 取最大值作为总时长
+        total_duration = max(resource_duration, learning_duration, record_duration)
 
         # 🔥 计算已完成的学习项数量（视频+文档）
         finished_count = db.query(UserResourceProgress).filter(
@@ -228,18 +242,33 @@ class LearningCenterService:
             CourseResource.type.in_(['video', 'document'])
         ).count()
 
-        # 🔥 今日学习时长
+        # 🔥 今日学习时长 - 修复SQLite兼容性
         today = datetime.now().date()
-        today_duration = db.query(func.sum(UserResourceProgress.total_study_duration)).filter(
+        today_start = datetime.combine(today, datetime.min.time())
+        today_end = datetime.combine(today, datetime.max.time())
+        
+        # 从多个数据源汇总今日学习时长
+        today_resource = db.query(func.sum(UserResourceProgress.total_study_duration)).filter(
             UserResourceProgress.user_id == user_id,
-            func.date(UserResourceProgress.last_study_time) == today
+            UserResourceProgress.last_study_time >= today_start,
+            UserResourceProgress.last_study_time <= today_end
         ).scalar() or 0
+        
+        today_learning = db.query(func.sum(LearningProgress.study_duration)).filter(
+            LearningProgress.user_id == user_id,
+            LearningProgress.last_study_time >= today_start,
+            LearningProgress.last_study_time <= today_end
+        ).scalar() or 0
+        
+        today_duration = max(today_resource, today_learning)
 
         # 错题数量
         wrong_count = db.query(WrongQuestion).filter(
             WrongQuestion.user_id == user_id,
             WrongQuestion.master_level < 2
         ).count()
+
+        logger.info(f"用户{user_id}学习统计 - 资源:{resource_duration}s, 知识点:{learning_duration}s, 记录:{record_duration}s, 总计:{total_duration}s, 今日:{today_duration}s")
 
         return {
             "total_study_duration": total_duration,

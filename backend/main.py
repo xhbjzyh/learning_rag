@@ -118,8 +118,8 @@ app.add_exception_handler(BusinessException, business_exception_handler)
 
 # ==================== 路由注册（完整版：无冲突、全适配） ====================
 # 公共接口（所有角色可访问）
-from api.common import auth_router
-app.include_router(auth_router, prefix="/api/common", tags=["公共认证接口"])
+from api.common import router as common_router
+app.include_router(common_router, prefix="/api/common", tags=["公共接口"])
 
 # 管理员接口（仅超级管理员可访问）
 from fastapi import APIRouter
@@ -134,6 +134,8 @@ from api.admin import (
     admin_course_router,      # 课程管理（优化版 + 习题接口）
              # 知识点问答管理（修复重复导入）
 )
+# 🔥 修复：删除重复的 system_config 和 stats 导入
+from api.admin import stats
 
 # 统一管理员根路由
 admin_router = APIRouter(prefix="/api/admin")
@@ -145,6 +147,8 @@ admin_router.include_router(system_config_router, tags=["管理员-系统配置"
 admin_router.include_router(system_audit_router, tags=["管理员-系统审计日志"])
 # 🔥 核心业务：课程/知识点/问答 路由（完整注册）
 admin_router.include_router(admin_course_router, tags=["管理员-课程管理"])
+# 🔥 新增：仪表盘统计
+admin_router.include_router(stats.router, tags=["管理员-仪表盘统计"])
 
 
 # 注册管理员总路由

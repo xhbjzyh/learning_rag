@@ -113,6 +113,24 @@ class UserCourseService:
 
             resource_list.append(resource_data)
 
+        # 🔥 关键修复：根据所有资源的进度动态计算课程总进度
+        if resources:
+            total_progress = 0
+            total_duration = 0
+            for r in resource_list:
+                user_prog = r.get("user_progress")
+                if user_prog:
+                    total_progress += user_prog.get("progress", 0) or 0
+                    total_duration += user_prog.get("total_study_duration", 0) or 0
+            
+            avg_progress = total_progress / len(resources) if resources else 0
+            
+            # 更新课程进度
+            user_progress.progress = round(avg_progress, 2)
+            user_progress.is_finished = avg_progress >= 100
+            user_progress.total_study_duration = total_duration
+            user_progress.last_study_time = func.now()
+
         db.commit()
         db.refresh(user_progress)
 
@@ -380,33 +398,68 @@ class UserCourseService:
         if not exercise:
             raise BusinessException("习题不存在")
 
+        # 🔥 修复：统一答案格式（将用户答案和正确答案都转换为字母）
+        def normalize_answer(answer):
+            """标准化答案格式：数字转字母"""
+            if not answer:
+                return answer
+            # 如果已经是字母，直接返回大写
+            if isinstance(answer, str) and answer.strip().upper() in ['A', 'B', 'C', 'D', 'E', 'F']:
+                return answer.strip().upper()
+            # 如果是数字，转换为字母（0->A, 1->B, 2->C, 3->D）
+            try:
+                num = int(answer)
+                if 0 <= num <= 5:
+                    return chr(ord('A') + num)
+            except (ValueError, TypeError):
+                pass
+            return answer
+        
+        # 标准化用户答案和正确答案
+        user_answer_normalized = normalize_answer(data.user_answer)
+        correct_answer_normalized = normalize_answer(exercise.answer)
+        
         # 2. 判断答案是否正确
-        is_correct = (data.user_answer == exercise.answer)
+        is_correct = (user_answer_normalized == correct_answer_normalized)
         final_score = exercise.score if is_correct else 0
 
         # ===================== 【1】保存答题记录 =====================
         record = UserExerciseRecord(
             user_id=user_id,
             exercise_id=data.exercise_id,
-            user_answer=data.user_answer,
+            user_answer=data.user_answer,  # 保存原始答案
             is_correct=is_correct,
             score=final_score,
             answer_time=data.answer_time if hasattr(data, 'answer_time') else None
         )
         db.add(record)
 
-        # ===================== 【2】保存错题记录（答错才存） =====================
+        # ===================== 【2】保存/更新错题记录（答错才存） =====================
         if not is_correct:
-            wrong = WrongQuestion(
-                user_id=user_id,
-                exercise_id=exercise.id,
-                question_title=exercise.title,
-                user_answer=data.user_answer,
-                correct_answer=exercise.answer,
-                wrong_count=1,
-                master_level=0
-            )
-            db.add(wrong)
+            # 检查是否已存在该错题
+            existing_wrong = db.query(WrongQuestion).filter(
+                WrongQuestion.user_id == user_id,
+                WrongQuestion.exercise_id == exercise.id
+            ).first()
+            
+            if existing_wrong:
+                # 已存在，更新错误次数和最后错误时间
+                existing_wrong.wrong_count += 1
+                existing_wrong.user_answer = data.user_answer
+                existing_wrong.last_wrong_time = func.now()
+                existing_wrong.master_level = max(0, existing_wrong.master_level - 1)  # 降低掌握等级
+            else:
+                # 不存在，创建新错题
+                wrong = WrongQuestion(
+                    user_id=user_id,
+                    exercise_id=exercise.id,
+                    question_title=exercise.title,
+                    user_answer=data.user_answer,
+                    correct_answer=correct_answer_normalized,  # 保存标准化后的正确答案
+                    wrong_count=1,
+                    master_level=0
+                )
+                db.add(wrong)
 
         # ===================== 【3】恢复：更新知识点掌握度 =====================
         self._update_knowledge_mastery(db, user_id, exercise, is_correct)
@@ -414,13 +467,24 @@ class UserCourseService:
         # 提交所有数据库变更
         db.commit()
 
-        # 返回结果
+        # 返回结果（🔥 增强：返回完整信息）
         return {
             "is_correct": is_correct,
             "user_answer": data.user_answer,
-            "correct_answer": exercise.answer,
+            "correct_answer": correct_answer_normalized,
             "score": final_score,
-            "analysis": exercise.analysis
+            "analysis": exercise.analysis or "暂无解析",
+            "exercise_title": exercise.title,
+            "exercise_type": exercise.type,
+            "difficulty": exercise.difficulty,
+            "options": [
+                {
+                    "id": opt.id,
+                    "option_label": opt.option_label,
+                    "option_content": opt.option_content,
+                    "is_correct": opt.is_correct
+                } for opt in exercise.options
+            ] if exercise.options else []
         }
 
     # ✅【终极修复】完全匹配你数据库UserKnowledgeMastery真实字段！！！
@@ -806,18 +870,37 @@ class UserCourseService:
                     except Exception:
                         return None
                 
+                # 🔥 修复：将数字答案转换为字母（0->A, 1->B, 2->C, 3->D）
+                def convert_answer_to_letter(answer):
+                    if not answer:
+                        return answer
+                    # 如果已经是字母，直接返回
+                    if isinstance(answer, str) and answer.strip().upper() in ['A', 'B', 'C', 'D', 'E', 'F']:
+                        return answer.strip().upper()
+                    # 如果是数字，转换为字母
+                    try:
+                        num = int(answer)
+                        if 0 <= num <= 5:
+                            return chr(ord('A') + num)
+                    except (ValueError, TypeError):
+                        pass
+                    return answer
+                
+                correct_answer_display = convert_answer_to_letter(item.correct_answer)
+                user_answer_display = convert_answer_to_letter(item.user_answer)
+                
                 wrong_data = {
                     "id": item.id,
                     "exercise_id": item.exercise_id,
                     "exercise_title": exercise.title if exercise else "未知习题",
                     "course_title": course.title if course else "未知课程",
                     "question_content": item.question_title or (exercise.title if exercise else ""),
-                    "user_answer": item.user_answer,
-                    "correct_answer": item.correct_answer,
+                    "user_answer": user_answer_display,
+                    "correct_answer": correct_answer_display,
                     "difficulty": exercise.difficulty if exercise else "medium",
                     "type": exercise.type if exercise else "short_answer",
                     "options": options_data,
-                    "explanation": exercise.analysis if exercise else "",
+                    "explanation": exercise.analysis if exercise else "暂无解析",
                     "error_reason": item.error_reason,
                     "wrong_count": item.wrong_count,
                     "master_level": item.master_level,
@@ -902,6 +985,54 @@ class UserCourseService:
         db.commit()
         return {"code": 0, "msg": "移除成功", "data": {"id": wrong_id}}
 
+    def _fix_malformed_json(self, json_str: str) -> str:
+        """
+        修复大模型返回的常见JSON格式错误
+        主要是修复options数组中对象格式错误的情况
+        """
+        import re
+        
+        try:
+            fixed_str = json_str
+            
+            # 🔥 策略1：修复options数组内的扁平结构
+            # 查找options数组部分
+            options_match = re.search(r'"options"\s*:\s*\[(.*?)\]', json_str, re.DOTALL)
+            if options_match:
+                options_content = options_match.group(1)
+                original_options_part = options_match.group(0)
+                
+                # 检查是否是扁平格式（缺少花括号）
+                if '"option_label"' in options_content and '{"option_label"' not in options_content:
+                    # 将扁平格式转换为对象格式
+                    # 按换行或逗号分割，然后每组包装成对象
+                    lines = re.split(r',(?=\s*"option_label")', options_content)
+                    
+                    fixed_options = []
+                    for line in lines:
+                        line = line.strip()
+                        if line and not line.startswith('{'):
+                            # 添加对象包装
+                            line = '{' + line + '}'
+                        fixed_options.append(line)
+                    
+                    fixed_options_str = ', '.join(fixed_options)
+                    fixed_options_full = f'"options" : [{fixed_options_str}]'
+                    
+                    # 替换原内容
+                    fixed_str = fixed_str.replace(original_options_part, fixed_options_full)
+            
+            # 🔥 策略2：修复多余的逗号
+            fixed_str = re.sub(r',(\s*[}\]])', r'\1', fixed_str)
+            
+            # 🔥 策略3：修复可能的引号问题
+            fixed_str = re.sub(r'\\\\"', r'"', fixed_str)
+            
+            return fixed_str
+        except Exception as e:
+            logger.error(f"修复JSON格式失败: {e}")
+            return json_str
+
     async def generate_special_practice(self, db: Session, user_id: int, wrong_id: int = None, point_id: int = None):
         """
         基于错题或知识点生成专项练习题（使用大模型）
@@ -928,7 +1059,7 @@ class UserCourseService:
                 
                 exercise = db.query(Exercise).filter(Exercise.id == wrong.exercise_id).first()
                 if exercise:
-                    target_content = f"错题题目：{exercise.title}\n错题内容：{wrong.question_title}\n用户答案：{wrong.user_answer}\n正确答案：{wrong.correct_answer}"
+                    target_content = f"错题题目：{exercise.title}\n错题内容：{exercise.title}\n用户答案：{wrong.user_answer}\n正确答案：{wrong.correct_answer}"
                     target_type = "wrong_exercise"
                 else:
                     target_content = f"错题记录：{wrong.question_title}\n用户答案：{wrong.user_answer}\n正确答案：{wrong.correct_answer}"
@@ -957,23 +1088,8 @@ class UserCourseService:
             if user_profile and user_profile.preferred_difficulty:
                 preferred_difficulty = user_profile.preferred_difficulty
             
-            # 3. 调用大模型生成练习题
-            json_example = '''{
-    "question": "这里写完整的题目描述，包括所有条件、场景、数据等详细信息。题目要具体明确，不能太简短。",
-    "type": "single_choice",
-    "difficulty": "中等",
-    "options": [
-        {"option_label": "A", "option_content": "选项A的完整详细描述", "is_correct": true},
-        {"option_label": "B", "option_content": "选项B的完整详细描述", "is_correct": false},
-        {"option_label": "C", "option_content": "选项C的完整详细描述", "is_correct": false},
-        {"option_label": "D", "option_content": "选项D的完整详细描述", "is_correct": false}
-    ],
-    "correct_answer": "A",
-    "analysis": "这里是详细的答案解析，至少100字，说明解题思路、知识点应用、为什么其他选项不对等"
-}'''
-
-            prompt = """
-你是一个专业的教育AI助手。请根据以下内容为用户生成一道专项练习题：
+            # 🔥 关键修复：使用普通字符串而非f-string，避免花括号转义问题
+            prompt = """你是一个专业的教育AI助手。请根据以下内容为用户生成一道专项练习题：
 
 【练习目标】
 """ + target_content + """
@@ -982,16 +1098,16 @@ class UserCourseService:
 """ + preferred_difficulty + """
 
 【重要要求】
-1. 必须生成一道完整的单选题或判断题
+1. 必须生成一道完整的单选题
 2. 题目描述要详细完整，包含所有必要的条件和信息
 3. 题干长度不少于50个字，确保题目清晰明确
-4. 提供4个选项（如果是单选题）或2个选项（如果是判断题）
+4. 提供4个选项（A、B、C、D）
 5. 每个选项的内容也要完整详细
-6. 明确指出正确答案
+6. 明确指出正确答案（只能是A、B、C、D中的一个）
 7. 提供详细的解析，说明为什么选这个答案
 
-【输出格式】
-请严格按照以下JSON格式输出，不要包含```
+【输出格式 - 极其重要】
+你必须且只能输出一个纯JSON对象，不要包含任何```
 
 ```
 {
@@ -999,25 +1115,17 @@ class UserCourseService:
     "type": "single_choice",
     "difficulty": "{preferred_difficulty}",
     "options": [
-        {{"option_label": "A", "option_content": "选项A的完整详细描述", "is_correct": true}},
-        {{"option_label": "B", "option_content": "选项B的完整详细描述", "is_correct": false}},
-        {{"option_label": "C", "option_content": "选项C的完整详细描述", "is_correct": false}},
-        {{"option_label": "D", "option_content": "选项D的完整详细描述", "is_correct": false}}
+        {"option_label": "A", "option_content": "选项A的完整详细描述", "is_correct": true},
+        {"option_label": "B", "option_content": "选项B的完整详细描述", "is_correct": false},
+        {"option_label": "C", "option_content": "选项C的完整详细描述", "is_correct": false},
+        {"option_label": "D", "option_content": "选项D的完整详细描述", "is_correct": false}
     ],
     "correct_answer": "A",
     "analysis": "这里是详细的答案解析，至少100字，说明解题思路、知识点应用、为什么其他选项不对等"
 }
 
-【示例】
-好的题目应该是这样的：
-"在Python编程中，关于列表(list)和元组(tuple)的区别，下列说法正确的是：列表是可变序列，支持增删改操作；而元组是不可变序列，创建后不能修改。在实际应用中，如果需要存储一组不会改变的数据（如坐标点、配置项等），应该使用哪种数据结构？"
+```"""
 
-而不是这样（太简短）：
-"列表和元组的区别是什么？"
-
-请现在开始生成题目：
-"""
-            
             # 调用大模型
             response = await llm.chat(prompt, timeout=60)
             logger.info(f"大模型原始响应长度: {len(response)}")

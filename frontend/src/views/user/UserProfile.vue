@@ -39,7 +39,7 @@
           <div class="stat-grid">
             <div class="stat-item">
               <div class="stat-value">{{ formatDuration(userProfile.total_study_duration) }}</div>
-              <div class="stat-label">学习总时长（小时）</div>
+              <div class="stat-label">学习总时长</div>
             </div>
             <div class="stat-item">
               <div class="stat-value">{{ userProfile.finished_points_count || 0 }}</div>
@@ -67,71 +67,6 @@
               :status="getProgressStatus(userProfile.average_score)"
               :show-text="false"
             />
-          </div>
-        </div>
-      </el-card>
-
-      <!-- 3. 用户画像-强弱标签卡片 -->
-      <el-card class="tags-card" shadow="hover">
-        <template #header>
-          <div class="card-header">
-            <span>知识点分析</span>
-            <el-icon><Document /></el-icon>
-          </div>
-        </template>
-        <div class="tags-content" v-loading="loading.profile">
-          <!-- 薄弱知识点 -->
-          <div class="tag-group">
-            <div class="group-title">
-              <el-tag type="danger" size="small" effect="dark">薄弱知识点</el-tag>
-            </div>
-            <div class="tag-list">
-              <el-tag
-                v-for="tag in userProfile.weak_tags"
-                :key="tag"
-                type="danger"
-                effect="plain"
-                class="tag-item"
-              >
-                {{ tag }}
-              </el-tag>
-              <span v-if="!userProfile.weak_tags?.length" class="empty-tip">
-                暂无薄弱知识点，继续加油！
-              </span>
-            </div>
-          </div>
-
-          <!-- 优势知识点 -->
-          <div class="tag-group">
-            <div class="group-title">
-              <el-tag type="success" size="small" effect="dark">优势知识点</el-tag>
-            </div>
-            <div class="tag-list">
-              <el-tag
-                v-for="tag in userProfile.strong_tags"
-                :key="tag"
-                type="success"
-                effect="plain"
-                class="tag-item"
-              >
-                {{ tag }}
-              </el-tag>
-              <span v-if="!userProfile.strong_tags?.length" class="empty-tip">
-                暂无优势知识点，多做题提升吧！
-              </span>
-            </div>
-          </div>
-
-          <!-- 偏好难度 -->
-          <div class="tag-group">
-            <div class="group-title">
-              <el-tag type="warning" size="small" effect="dark">偏好难度</el-tag>
-            </div>
-            <div class="tag-list">
-              <el-tag type="warning" effect="plain">
-                {{ userProfile.preferred_difficulty || '暂无偏好' }}
-              </el-tag>
-            </div>
           </div>
         </div>
       </el-card>
@@ -199,7 +134,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { User, DataAnalysis, Document, Lock } from '@element-plus/icons-vue'
+import { User, DataAnalysis, Lock } from '@element-plus/icons-vue'
 import userProfileApi from '@/api/user/userProfile.js'
 
 // 加载状态
@@ -257,28 +192,32 @@ const formatTime = (timestamp) => {
 }
 
 /**
- * 格式化学习时长（自动识别单位，避免异常值）
- * @param {number} duration - 时长（毫秒/秒）
+ * 格式化学习时长（智能显示）
+ * @param {number} duration - 时长（秒）
  */
 const formatDuration = (duration) => {
-  if (!duration || duration <= 0) return 0
+  if (!duration || duration <= 0) return '0'
 
-  // 自动识别单位：如果数值过大，说明是毫秒，否则是秒
-  let hours
-  if (duration > 1e9) { // 大于1e9毫秒（约11天），按毫秒计算
-    hours = duration / 1000/1000/1000 / 60 / 60
-  } else { // 否则按秒计算
-    hours = duration / 60 / 60
+  // 转换为数字类型（防止字符串）
+  const seconds = Number(duration)
+
+  if (seconds < 60) {
+    // 小于1分钟，显示秒
+    return `${seconds}秒`
+  } else if (seconds < 3600) {
+    // 小于1小时，显示分钟
+    const minutes = Math.floor(seconds / 60)
+    const remainingSeconds = seconds % 60
+    return remainingSeconds > 0
+      ? `${minutes}分${remainingSeconds}秒`
+      : `${minutes}分钟`
+  } else {
+    // 大于1小时，显示小时
+    const hours = seconds / 3600
+    return `${hours.toFixed(1)}小时`
   }
-
-  // 限制最大显示9999小时，避免异常值
-  return Math.min(hours, 9999).toFixed(1)
 }
 
-/**
- * 格式化正确率（限制在0-100%之间）
- * @param {number} score - 正确率（0-1 或 0-100）
- */
 /**
  * 格式化正确率（适配满分10分的得分）
  * @param {number} score - 得分（0-10分，满分10分）
@@ -476,41 +415,6 @@ onMounted(() => {
   color: #606266;
   margin-bottom: 8px;
   font-weight: 500;
-}
-
-/* 知识点分析卡片 */
-.tags-content {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.tag-group {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.group-title {
-  font-size: 14px;
-  font-weight: 500;
-}
-
-.tag-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-}
-
-.tag-item {
-  margin: 0;
-  font-size: 12px;
-}
-
-.empty-tip {
-  font-size: 13px;
-  color: #909399;
 }
 
 /* 修改密码卡片 */

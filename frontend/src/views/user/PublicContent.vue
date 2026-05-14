@@ -244,7 +244,7 @@ const handleDownload = async (row) => {
     console.log('清洗后的Authorization头:', token)
 
     // 下载接口
-    const downloadUrl = `/api/user/content/public/content/public/document/${row.id}/download`
+    const downloadUrl = `/api/user/content/public/document/${row.id}/download`
     console.log('请求地址:', downloadUrl)
 
     // 发送请求

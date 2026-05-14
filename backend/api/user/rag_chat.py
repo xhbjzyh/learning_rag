@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Query, Depends, Body
+from fastapi import APIRouter, Query, Depends, Body, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from utils.logger import logger
@@ -19,31 +19,41 @@ router = APIRouter(prefix="/rag", tags=["用户-RAG问答"])
 async def rag_answer(
         query: str = Body(..., embed=True),
         kb_type: str = Body("private", embed=True, description="public=公共 private=私有"),
+        history: list = Body([], description="对话历史"),
+        background_tasks: BackgroundTasks = None,
         db: Session = Depends(get_db),
         current_user: SysUser = Depends(get_current_user)
 ):
     try:
-        # 调用RAG引擎（异步）
-        answer = await rag_engine.answer(query, current_user.id, kb_type)
+        # 🔥 调用RAG引擎（异步，支持对话历史）
+        answer = await rag_engine.answer(query, current_user.id, kb_type, history=history)
 
-        # 个性化课程推荐（当检测到学习相关问题时）
-        try:
-            from service.user.recommendation_service import recommendation_service
-            recommendations = recommendation_service.get_personalized_recommendations(
-                db=db,
-                user_id=current_user.id,
-                query=query,
-                limit=3
-            )
-        except Exception as e:
-            logger.warning(f"课程推荐功能异常: {str(e)}")
-            recommendations = []
+        # 🔥 异步更新推荐（不阻塞响应）
+        if background_tasks:
+            from tasks.recommendation_tasks import update_user_recommendations_async
+            await update_user_recommendations_async(db, current_user.id, background_tasks)
+
+        # 🔥 从缓存获取推荐（快速返回）
+        from utils.cache import cache_service
+        cache_key = f"user:recommendations:{current_user.id}"
+        recommendations = cache_service.get(cache_key) or []
+        
+        # 如果缓存为空，实时计算
+        if not recommendations:
+            try:
+                from service.user.user_profile_service import enhanced_behavior_service
+                recommendations = enhanced_behavior_service.get_smart_recommendations(
+                    db=db,
+                    user_id=current_user.id,
+                    limit=5
+                )
+            except Exception as e:
+                logger.warning(f"实时推荐失败: {e}")
+                recommendations = []
 
         return success_response(data={
             "answer": answer,
-            "recommendations": {
-                "courses": recommendations
-            },
+            "recommendations": recommendations[:5],
             "kb_type": kb_type
         })
     except Exception as e:
@@ -79,28 +89,30 @@ async def rag_answer_stream(
         ):
             yield chunk
         
-        # 🔥 在学习相关问题时，附加课程推荐
+        # 🔥 增强：在学习相关问题时，附加智能推荐
         try:
             from service.user.recommendation_service import recommendation_service
+            from service.user.user_profile_service import enhanced_behavior_service
+            
             intent = recommendation_service.detect_learning_intent(query)
             
             if intent["is_learning"]:
-                recommendations = recommendation_service.search_courses_by_keywords(
+                # 获取智能推荐
+                smart_recs = enhanced_behavior_service.get_smart_recommendations(
                     db=db,
-                    keywords=intent["topics"],
-                    difficulty=intent["level"],
+                    user_id=current_user.id,
                     limit=3
                 )
                 
-                if recommendations:
+                if smart_recs:
                     # 以JSON格式附加推荐信息
                     import json
-                    recommend_text = f"\n\n📚 为你推荐以下课程：\n"
-                    for i, course in enumerate(recommendations, 1):
-                        recommend_text += f"{i}. 《{course['title']}》 - {course['lecturer']}\n"
-                        recommend_text += f"   {course['reason']}\n"
+                    recommend_data = {
+                        "type": "recommendations",
+                        "courses": smart_recs
+                    }
                     
-                    yield recommend_text.encode('utf-8')
+                    yield f"\n\n<!--RECOMMENDATION_START-->{json.dumps(recommend_data, ensure_ascii=False)}<!--RECOMMENDATION_END-->".encode('utf-8')
         except Exception as e:
             logger.warning(f"流式推荐异常: {str(e)}")
 

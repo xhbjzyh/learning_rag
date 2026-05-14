@@ -28,6 +28,7 @@ from datetime import datetime
 import os
 from uuid import uuid4
 from typing import List, Optional
+from utils.logger import logger  # 🔥 新增：导入 logger
 
 
 # ==================== 工具类导入（修复依赖 + 避免循环导入） ====================
@@ -48,25 +49,67 @@ class AdminCourseService:
     """
 
     # ==================== 原有课程管理（优化校验 + 规范代码） ====================
-    def get_course_list(self, db: Session, page: int = 1, size: int = 10, title: str = None):
+    def get_course_list(self, db: Session, page: int = 1, size: int = 10, title: str = None, category_id: int = None, difficulty: str = None):
         """获取课程列表（分页 + 搜索）"""
         query = db.query(Course)
+
+        # 标题搜索
         if title:
             query = query.filter(Course.title.like(f"%{title}%"))
+
+        # 分类筛选
+        if category_id is not None:
+            query = query.filter(Course.category_id == category_id)
+
+        # 难度筛选
+        if difficulty:
+            query = query.filter(Course.difficulty == difficulty)
 
         total = query.count()
         items = query.offset((page - 1) * size).limit(size).all()
         return {"total": total, "items": items, "page": page, "size": size}
 
     def create_course(self, db: Session, data: AdminCourseCreateRequest):
-        """创建课程（重名校验）"""
+        """创建课程（重名校验 + 自动同步知识点）"""
         if db.query(Course).filter(Course.title == data.title).first():
             raise HTTPException(status_code=400, detail="课程标题已存在")
 
         course = Course(**data.model_dump())
         db.add(course)
+        db.flush()  # 🔥 获取course.id
+
+        # 🔥 如果有关联的课程知识点，创建它们
+        if hasattr(data, 'knowledge_points') and data.knowledge_points:
+            from models.db_models import CourseKnowledgePoint
+
+            for kp_data in data.knowledge_points:
+                course_kp = CourseKnowledgePoint(
+                    course_id=course.id,
+                    title=kp_data.title,
+                    content=kp_data.content,
+                    key_points=kp_data.key_points if hasattr(kp_data, 'key_points') else None,
+                    difficulty=kp_data.difficulty if hasattr(kp_data, 'difficulty') else "中等",
+                    sort_order=kp_data.sort_order if hasattr(kp_data, 'sort_order') else 0
+                )
+                db.add(course_kp)
+
         db.commit()
         db.refresh(course)
+
+        # 🔥 自动同步课程知识点到公共知识库
+        try:
+            from service.admin.knowledge_sync_service import knowledge_sync_service
+            sync_result = knowledge_sync_service.sync_course_to_public(db, course.id)
+
+            logger.info(f"✅ 课程 {course.id} 知识点同步完成: {sync_result}")
+
+            # 将同步结果附加到返回数据
+            course.sync_result = sync_result
+        except Exception as e:
+            logger.error(f"⚠️ 课程知识点同步失败: {e}")
+            # 同步失败不影响课程创建
+            course.sync_result = {"error": str(e)}
+
         return course
 
     def update_course(self, db: Session, course_id: int, data: AdminCourseUpdateRequest):
@@ -220,91 +263,196 @@ class AdminCourseService:
         db.commit()
         return True
 
-    # ==================== 习题管理 ====================
-    # ==================== 习题管理 ====================
-    def create_exercise(self, db: Session, course_id: int, data: ExerciseCreate):
-        # 1. 校验课程是否存在
-        course = db.query(Course).get(course_id)
-        if not course:
+    # ==================== 🔥 习题管理（新增） ====================
+    def get_exercise_list(self, db: Session, course_id: int):
+        """获取课程下所有习题"""
+        from models.db_models import Exercise, ExerciseOption
+
+        # 验证课程是否存在
+        if not db.query(Course).get(course_id):
             raise HTTPException(status_code=404, detail="课程不存在")
 
-        # 核心：排除无效字段
-        exercise_data = data.model_dump(
-            exclude={"knowledge_ids", "course_knowledge_ids", "options"},
-            exclude_unset=True
+        # 查询习题列表 - 🔥 按ID升序排序
+        exercises = db.query(Exercise).filter(
+            Exercise.course_id == course_id
+        ).order_by(Exercise.id.asc()).all()
+
+        # 补充选项和知识点信息
+        result = []
+        for exercise in exercises:
+            exercise_dict = {
+                "id": exercise.id,
+                "title": exercise.title,
+                "type": exercise.type,
+                "difficulty": exercise.difficulty,
+                "analysis": exercise.analysis,
+                "score": exercise.score,
+                "create_time": exercise.create_time,
+                # 关联的知识点ID列表
+                "knowledge_ids": [],
+                "course_knowledge_ids": [kp.id for kp in exercise.course_knowledge_points],
+                # 选项列表
+                "options": [
+                    {
+                        "id": opt.id,
+                        "option_label": opt.option_label,
+                        "option_content": opt.option_content,
+                        "is_correct": opt.is_correct,
+                        "order": opt.order
+                    }
+                    for opt in sorted(exercise.options, key=lambda x: x.order)
+                ]
+            }
+            result.append(exercise_dict)
+
+        return result
+
+    def create_exercise(self, db: Session, course_id: int, data):
+        """创建课程习题"""
+        from models.db_models import Exercise, ExerciseOption
+        
+        # 验证课程存在
+        if not db.query(Course).get(course_id):
+            raise HTTPException(status_code=404, detail="课程不存在")
+        
+        # 🔥 关键修复：确保 answer 字段存储的是字母格式（A/B/C/D）
+        answer = data.answer
+        if answer:
+            # 如果传入的是数字索引，转换为字母（0->A, 1->B, 2->C, 3->D）
+            try:
+                num = int(answer)
+                if 0 <= num <= 5:
+                    answer = chr(ord('A') + num)
+            except (ValueError, TypeError):
+                # 如果不是数字，保持原样（假设已经是字母）
+                answer = answer.strip().upper()
+        
+        if not answer and data.options:
+            # 对于选择题，从选项中提取正确答案并转换为字母
+            correct_options = [opt for opt in data.options if opt.is_correct]
+            if correct_options:
+                # 取第一个正确选项的索引，转换为字母
+                first_correct = correct_options[0]
+                order = first_correct.order if hasattr(first_correct, 'order') else 0
+                answer = chr(ord('A') + order)
+            else:
+                answer = "暂无标准答案"
+        elif not answer:
+            answer = "暂无标准答案"
+        
+        exercise = Exercise(
+            course_id=course_id,
+            title=data.title,
+            type=data.type.value if hasattr(data.type, 'value') else data.type,
+            difficulty=data.difficulty,
+            answer=answer,  # 🔥 确保存储的是字母格式
+            analysis=data.analysis,
+            score=10.0  # 默认分值
         )
-
-        # 2. 创建习题对象
-        exercise = Exercise(**exercise_data, course_id=course_id)
         db.add(exercise)
-
-        # 3. 保存选项 + 🔥 自动生成正确答案（解决 answer 非空报错）
-        correct_answers = []
-        if hasattr(data, "options") and data.options:
-            for opt in data.options:
-                # 记录正确答案
-                if opt.is_correct:
-                    correct_answers.append(opt.option_label)
-                # 添加选项
-                option = ExerciseOption(
-                    content=opt.option_content,
-                    is_correct=opt.is_correct,
-                    order=ord(opt.option_label.upper()) - ord('A') + 1 if opt.option_label else None
-                )
-                exercise.options.append(option)
-
-        # 🔥 关键：赋值答案（满足非空约束）
-        exercise.answer = ",".join(correct_answers) if correct_answers else ""
-
-        # 4. 关联课程知识点
+        db.flush()
+        
+        # 关联知识点
         if data.course_knowledge_ids:
-            knowledges = db.query(CourseKnowledgePoint).filter(
-                CourseKnowledgePoint.id.in_(data.course_knowledge_ids),
-                CourseKnowledgePoint.course_id == course_id
-            ).all()
-            exercise.course_knowledge_points = knowledges
-
-        # 5. 提交数据库
+            valid_ids = [kid for kid in data.course_knowledge_ids if isinstance(kid, int) and kid > 0]
+            if valid_ids:
+                exercise.course_knowledge_points = db.query(CourseKnowledgePoint).filter(
+                    CourseKnowledgePoint.id.in_(valid_ids)
+                ).all()
+        
+        # 创建选项
+        if data.options:
+            for opt_data in data.options:
+                option = ExerciseOption(
+                    exercise_id=exercise.id,
+                    content=opt_data.option_content,  # 🔥 使用 content 字段
+                    is_correct=opt_data.is_correct,
+                    order=opt_data.order if hasattr(opt_data, 'order') else 0
+                )
+                db.add(option)
+        
         db.commit()
         db.refresh(exercise)
-
-        # 组装返回数据
-        exercise.course_knowledge_ids = [k.id for k in exercise.course_knowledge_points]
         return exercise
-
-    def update_exercise(self, db: Session, exercise_id: int, data: ExerciseUpdate):
+    
+    def update_exercise(self, db: Session, exercise_id: int, data):
+        """更新课程习题"""
+        from models.db_models import Exercise, ExerciseOption
+        
+        # 查询习题
         exercise = db.query(Exercise).get(exercise_id)
         if not exercise:
             raise HTTPException(status_code=404, detail="习题不存在")
-
-        update_data = data.model_dump(exclude_unset=True, exclude={"course_knowledge_ids"})
-        for k, v in update_data.items():
-            setattr(exercise, k, v)
-
+        
+        # 更新基本字段
+        if data.title is not None:
+            exercise.title = data.title
+        if data.type is not None:
+            exercise.type = data.type.value if hasattr(data.type, 'value') else data.type
+        if data.difficulty is not None:
+            exercise.difficulty = data.difficulty
+        if data.analysis is not None:
+            exercise.analysis = data.analysis
+        
+        # 🔥 关键修复：更新答案时也转换为字母格式
+        if data.answer is not None:
+            answer = data.answer
+            try:
+                num = int(answer)
+                if 0 <= num <= 5:
+                    answer = chr(ord('A') + num)
+            except (ValueError, TypeError):
+                answer = answer.strip().upper()
+            exercise.answer = answer
+        
+        # 更新知识点关联
         if data.course_knowledge_ids is not None:
+            exercise.course_knowledge_points = []
             valid_ids = [kid for kid in data.course_knowledge_ids if isinstance(kid, int) and kid > 0]
-            exercise.course_knowledge_points = db.query(CourseKnowledgePoint).filter(
-                CourseKnowledgePoint.id.in_(valid_ids)
-            ).all()
-
+            if valid_ids:
+                exercise.course_knowledge_points = db.query(CourseKnowledgePoint).filter(
+                    CourseKnowledgePoint.id.in_(valid_ids)
+                ).all()
+        
+        # 更新选项（先删除旧选项，再创建新选项）
+        if data.options is not None:
+            # 删除旧选项
+            db.query(ExerciseOption).filter(ExerciseOption.exercise_id == exercise_id).delete()
+            
+            # 如果有新选项且没有显式提供答案，从选项中提取
+            if data.options and data.answer is None:
+                correct_options = [opt for opt in data.options if opt.is_correct]
+                if correct_options:
+                    first_correct = correct_options[0]
+                    order = first_correct.order if hasattr(first_correct, 'order') else 0
+                    exercise.answer = chr(ord('A') + order)
+            
+            # 创建新选项
+            for opt_data in data.options:
+                option = ExerciseOption(
+                    exercise_id=exercise_id,
+                    content=opt_data.option_content,  # 🔥 使用 content 字段
+                    is_correct=opt_data.is_correct,
+                    order=opt_data.order if hasattr(opt_data, 'order') else 0
+                )
+                db.add(option)
+        
         db.commit()
         db.refresh(exercise)
-        exercise.course_knowledge_ids = [kp.id for kp in exercise.course_knowledge_points]
         return exercise
-
-    def get_exercise_list(self, db: Session, course_id: int):
-        exercises = db.query(Exercise).filter(Exercise.course_id == course_id).all()
-        for ex in exercises:
-            ex.course_knowledge_ids = [kp.id for kp in ex.course_knowledge_points]
-        return exercises
 
     def delete_exercise(self, db: Session, exercise_id: int):
+        """删除课程习题"""
+        from models.db_models import Exercise
+
         exercise = db.query(Exercise).get(exercise_id)
         if not exercise:
             raise HTTPException(status_code=404, detail="习题不存在")
+
         db.delete(exercise)
         db.commit()
         return True
+
     # ==================== 🔥 文件上传（优化：规范路径 + 类型校验） ====================
     def create_resource_with_file(
             self, db: Session, course_id: int,
@@ -440,11 +588,11 @@ class AdminCourseService:
         return mastery
 
     def _update_common_progress_fields(self, progress: UserResourceProgress, data: ResourceProgressUpdate):
-        if data.progress is not None: 
+        if data.progress is not None:
             progress.progress = data.progress
-        if data.is_finished is not None: 
+        if data.is_finished is not None:
             progress.is_finished = data.is_finished
-        
+
         # 🔥 关键修复：累加学习时长
         if hasattr(data, 'study_duration') and data.study_duration:
             # 累加本次学习时长
@@ -452,7 +600,7 @@ class AdminCourseService:
         elif data.total_study_duration is not None:
             # 如果没有 study_duration，使用 total_study_duration（取最大值）
             progress.total_study_duration = max(progress.total_study_duration, data.total_study_duration)
-        
+
         progress.study_count += 1
         progress.last_study_time = datetime.utcnow()
 
@@ -460,21 +608,21 @@ class AdminCourseService:
         # 🔥 调试日志：打印关键信息
         from utils.logger import logger
         logger.info(f"🔥 视频进度更新调试: watch_position={data.watch_position}, progress.watch_position={progress.watch_position}, resource={progress.resource}, duration={progress.resource.duration if progress.resource else 'N/A'}")
-        
+
         # 🔥 关键修复：确保 watch_position 不为 None
         if data.watch_position is not None:
             progress.watch_position = data.watch_position
-        
+
         # 🔥 防御性编程：处理所有可能的 None 值
         watch_pos = progress.watch_position or 0
-        
+
         # 确保 resource 和 duration 存在
         duration = 1  # 默认值
         if hasattr(progress, 'resource') and progress.resource:
             duration = getattr(progress.resource, 'duration', None) or 1
-        
+
         logger.info(f"🔥 计算参数: watch_pos={watch_pos}, duration={duration}")
-        
+
         # 计算完成率（避免除以0和None）
         try:
             progress.completion_rate = min(watch_pos / duration, 1.0)

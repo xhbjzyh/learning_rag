@@ -16,17 +16,17 @@
 
     <!-- 搜索栏 -->
     <el-card class="search-card" shadow="hover">
-      <el-form :model="queryParams" inline @keyup.enter="getList">
+      <el-form :model="queryParams" inline>
         <el-form-item label="课程标题">
-          <el-input v-model="queryParams.title" placeholder="请输入课程标题" clearable />
+          <el-input v-model="queryParams.title" placeholder="请输入课程标题" clearable @keyup.enter="getList" />
         </el-form-item>
         <el-form-item label="课程分类">
-          <el-select v-model="queryParams.category_id" placeholder="请选择分类" clearable style="width:180px">
+          <el-select v-model="queryParams.category_id" placeholder="请选择分类" clearable style="width:180px" @change="getList">
             <el-option v-for="item in categoryList" :key="item.id" :label="item.name" :value="item.id" />
           </el-select>
         </el-form-item>
         <el-form-item label="难度">
-          <el-select v-model="queryParams.difficulty" placeholder="请选择难度" clearable style="width:120px">
+          <el-select v-model="queryParams.difficulty" placeholder="请选择难度" clearable style="width:120px" @change="getList">
             <el-option label="简单" value="简单" />
             <el-option label="中等" value="中等" />
             <el-option label="困难" value="困难" />
@@ -46,7 +46,7 @@
         <el-table-column label="课程封面" align="center" width="120">
           <template #default="{ row }">
             <el-image
-              :src="row?.cover_url || 'https://picsum.photos/200/120'"
+              :src="getFullImageUrl(row?.cover_url)"
               fit="cover"
               style="width:80px;height:50px;border-radius:4px"
               preview-teleported
@@ -112,12 +112,14 @@
             :headers="uploadHeaders"
             :show-file-list="false"
             :on-success="handleUploadSuccess"
+            :on-error="handleUploadError"
             accept="image/*"
           >
             <el-image
-              :src="form.cover_url || 'https://picsum.photos/200/120'"
+              :src="getFullImageUrl(form.cover_url)"
               fit="cover"
               style="width:120px;height:80px;border-radius:4px;cursor:pointer"
+              :preview-src-list="[getFullImageUrl(form.cover_url)]"
             />
           </el-upload>
         </el-form-item>
@@ -247,21 +249,53 @@ const rules = {
 }
 
 // 上传配置
-const uploadUrl = computed(() => `${import.meta.env.VITE_API_BASE_URL}/common/upload`)
+const uploadUrl = computed(() => `${import.meta.env.VITE_API_BASE_URL}/api/common/upload`)
 const uploadHeaders = computed(() => ({
   Authorization: `Bearer ${localStorage.getItem('token')}`
 }))
 
-// 上传成功
-const handleUploadSuccess = (res) => {
-  console.log('上传响应:', res) // 调试日志
-  if (res.code === 0 && res.data) {
-    // 后端返回的是 file_url，直接使用
-    form.cover_url = res.data.file_url || res.data.url
+// 获取完整的图片URL
+const getFullImageUrl = (url) => {
+  if (!url) return 'https://picsum.photos/200/120'
+  // 如果已经是完整URL，直接返回
+  if (url.startsWith('http')) return url
+  // 否则拼接基础URL
+  const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+  return `${baseUrl}${url}`
+}
+
+// 上传成功回调
+const handleUploadSuccess = (response) => {
+  console.log('上传响应原始数据:', response) // 调试日志
+
+  // axios拦截器已经处理过响应，response就是后端返回的完整对象
+  // 格式: {code: 0, msg: "文件上传成功", data: {file_url: "...", ...}}
+  if (response && response.code === 0 && response.data) {
+    form.cover_url = response.data.file_url
     ElMessage.success('上传成功')
+    console.log('封面URL已设置:', form.cover_url)
+
+    // 🔥 强制触发视图更新（确保图片立即显示）
+    setTimeout(() => {
+      console.log('当前封面URL:', form.cover_url)
+    }, 100)
   } else {
-    ElMessage.error(res.msg || '上传失败')
+    // 如果没有code字段，说明是裸数据（兼容处理）
+    if (response && response.file_url) {
+      form.cover_url = response.file_url
+      ElMessage.success('上传成功')
+      console.log('封面URL已设置(裸数据):', form.cover_url)
+    } else {
+      ElMessage.error(response?.msg || '上传失败')
+      console.error('上传失败，响应数据:', response)
+    }
   }
+}
+
+// 上传失败回调
+const handleUploadError = (error) => {
+  console.error('上传失败:', error)
+  ElMessage.error('图片上传失败，请重试')
 }
 
 // ==================== 课程分类管理 ====================

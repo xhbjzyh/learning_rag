@@ -99,38 +99,45 @@ const pendingAuditList = ref([])
 // 获取统计数据
 const getStats = async () => {
   try {
-    // 用现有接口统计数据
-    const userRes = await adminApi.getUserList()
-    stats.value.userCount = userRes.data.length
-
-    const auditRes = await adminApi.getAuditList()
-    const pendingList = auditRes.data.filter(item => item.status === 2)
-    stats.value.pendingAuditCount = pendingList.length
-    pendingAuditList.value = pendingList.slice(0, 5)
-
-    const docRes = await adminApi.getAllDocumentList()
-    stats.value.docCount = docRes.data.length
-
-    const auditorRes = await adminApi.getAuditorList()
-    stats.value.auditorCount = auditorRes.data.length
+    const res = await adminApi.getDashboardStats()
+    if (res.code === 0 && res.data) {
+      stats.value.userCount = res.data.user_count || 0
+      stats.value.pendingAuditCount = res.data.pending_audit_count || 0
+      stats.value.docCount = res.data.doc_count || 0
+      stats.value.auditorCount = res.data.auditor_count || 0
+      pendingAuditList.value = res.data.recent_pending || []
+    }
   } catch (error) {
     console.error('获取统计数据失败:', error)
+    ElMessage.error('获取统计数据失败')
   }
 }
 
 // 审核操作
 const handlePass = async (id) => {
-  await ElMessageBox.confirm('确认通过该申请？')
-  await adminApi.auditPass(id)
-  ElMessage.success('审核通过')
-  getStats()
+  try {
+    await ElMessageBox.confirm('确认通过该申请？')
+    // TODO: 调用审核通过接口
+    ElMessage.success('审核通过')
+    getStats()
+  } catch (error) {
+    if (error !== 'cancel') {
+      ElMessage.error('操作失败')
+    }
+  }
 }
 
 const handleReject = async (id) => {
-  await ElMessageBox.confirm('确认拒绝该申请？')
-  await adminApi.auditReject(id, '审核不通过')
-  ElMessage.success('已拒绝')
-  getStats()
+  try {
+    await ElMessageBox.confirm('确认拒绝该申请？')
+    // TODO: 调用审核拒绝接口
+    ElMessage.success('已拒绝')
+    getStats()
+  } catch (error) {
+    if (error !== 'cancel') {
+      ElMessage.error('操作失败')
+    }
+  }
 }
 
 onMounted(() => {

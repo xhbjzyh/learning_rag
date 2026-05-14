@@ -108,7 +108,7 @@ const learningCenterApi = {
    */
   getStats() {
     return request({
-      url: '/user/learning-center/stats',
+      url: '/user/learning/stats',
       method: 'get'
     }).then(res => res || {})
   }

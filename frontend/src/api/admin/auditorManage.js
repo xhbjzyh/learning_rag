@@ -10,7 +10,7 @@ const auditorManageApi = {
    */
   createAuditor(data) {
     return request({
-      url: '/admin/auditor/auditor/create',
+      url: '/admin/auditor/create',
       method: 'post',
       data
     })
@@ -22,7 +22,7 @@ const auditorManageApi = {
    */
   getAuditorList(params) {
     return request({
-      url: '/admin/auditor/auditor/list',
+      url: '/admin/auditor/list',
       method: 'get',
       params
     })
@@ -34,7 +34,7 @@ const auditorManageApi = {
    */
   deleteAuditor(auditorId) {
     return request({
-      url: `/admin/auditor/auditor/${auditorId}`,
+      url: `/admin/auditor/${auditorId}`,
       method: 'delete'
     })
   }

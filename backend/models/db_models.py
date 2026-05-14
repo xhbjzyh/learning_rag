@@ -66,6 +66,17 @@ exercise_course_knowledge_rel = Table(
     Column("create_time", DateTime, default=func.now())
 )
 
+# 🔥 新增：知识库文档-知识点多对多关联表（移到这里，确保在使用前定义）
+knowledge_document_rel = Table(
+    "knowledge_document_rel",
+    Base.metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True, comment="关联ID"),
+    Column("document_id", Integer, ForeignKey("knowledge_document.id", ondelete="CASCADE"), nullable=False, index=True, comment="文档ID"),
+    Column("knowledge_point_id", Integer, ForeignKey("knowledge_point.id", ondelete="CASCADE"), nullable=False, index=True, comment="知识点ID"),
+    Column("weight", Float, nullable=False, default=1.0, comment="关联权重"),
+    Column("create_time", TIMESTAMP, nullable=False, server_default=func.now(), comment="创建时间"),
+    comment="知识库文档-知识点多对多关联表"
+)
 
 
 # ==================== 用户模块模型 ====================
@@ -76,6 +87,20 @@ class SysRole(Base):
     id = Column(Integer, primary_key=True, autoincrement=True, comment="角色ID，主键自增")
     role_name = Column(String(32), nullable=False, unique=True, comment="角色名称，唯一标识：admin/user")
     description = Column(String(255), comment="角色描述")
+    create_time = Column(TIMESTAMP, nullable=False, server_default=func.now(), comment="创建时间")
+    update_time = Column(TIMESTAMP, nullable=False, server_default=func.now(), onupdate=func.now(), comment="更新时间")
+
+
+class SystemConfig(Base):
+    """系统配置表（动态配置）"""
+    __tablename__ = "system_config"
+
+    id = Column(Integer, primary_key=True, autoincrement=True, comment="配置ID")
+    config_key = Column(String(64), nullable=False, unique=True, index=True, comment="配置键")
+    config_value = Column(Text, nullable=True, comment="配置值")
+    config_type = Column(String(32), nullable=False, default="string", comment="配置类型：string/int/bool/json")
+    description = Column(String(255), comment="配置描述")
+    is_enabled = Column(Boolean, default=True, comment="是否启用")
     create_time = Column(TIMESTAMP, nullable=False, server_default=func.now(), comment="创建时间")
     update_time = Column(TIMESTAMP, nullable=False, server_default=func.now(), onupdate=func.now(), comment="更新时间")
 
@@ -156,9 +181,14 @@ class UserLearningHistory(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True, comment="历史ID")
     user_id = Column(Integer, ForeignKey("sys_user.id"), nullable=False, comment="用户ID")
-    point_id = Column(Integer, ForeignKey("knowledge_point.id"), nullable=False, comment="知识点ID")
-    study_duration = Column(Integer, comment="学习时长（分钟）")
+    
+    # 🔥 修复：同时支持知识库知识点和课程知识点
+    point_id = Column(Integer, ForeignKey("knowledge_point.id"), nullable=True, comment="知识库知识点ID（可选）")
+    course_knowledge_id = Column(Integer, ForeignKey("course_knowledge_point.id"), nullable=True, comment="课程知识点ID（可选）")
+    
+    study_duration = Column(Integer, comment="学习时长（秒）")
     is_mastered = Column(Integer, default=0, comment="是否已掌握")
+    session_type = Column(String(32), default="study", comment="会话类型：study/practice/review")
     create_time = Column(TIMESTAMP, nullable=False, server_default=func.now(), comment="学习时间")
 
 
@@ -225,7 +255,7 @@ class KnowledgeDocument(Base):
     process_message = Column(String(255), comment="处理信息")
 
     # 关联
-    knowledge_points = relationship("KnowledgePoint", back_populates="document", cascade="all, delete-orphan")
+    knowledge_points = relationship("KnowledgePoint", secondary=knowledge_document_rel, back_populates="documents")
 
 
 class KnowledgeTag(Base):
@@ -240,6 +270,7 @@ class KnowledgeTag(Base):
 
     points = relationship("KnowledgePoint", secondary="knowledge_point_tag_rel", back_populates="tags")
 
+
 class KnowledgePointTagRel(Base):
     """知识点-标签多对多关联表"""
     __tablename__ = "knowledge_point_tag_rel"
@@ -251,32 +282,31 @@ class KnowledgePointTagRel(Base):
 
 
 class KnowledgePoint(Base):
-    """🔥 知识库知识点表（独立体系，不与课程绑定）"""
+    """知识点表（统一知识库）"""
     __tablename__ = "knowledge_point"
 
     id = Column(Integer, primary_key=True, autoincrement=True, comment="知识点ID")
-    doc_id = Column(Integer, ForeignKey("knowledge_document.id"), nullable=False, comment="文档ID")
-    user_id = Column(Integer, ForeignKey("sys_user.id"), nullable=False, comment="用户ID")
-    title = Column(String(255), nullable=False, comment="标题")
-    content = Column(Text, nullable=False, comment="内容")
+    title = Column(String(255), nullable=False, comment="知识点标题")
+    content = Column(Text, nullable=False, comment="知识点内容")
     key_points = Column(Text, comment="核心要点（JSON）")
     difficulty = Column(String(32), nullable=False, default="中等", comment="难度")
-    pre_knowledge = Column(Text, comment="前置知识（JSON）")
-    common_mistakes = Column(Text, comment="常见错误（JSON）")
-    related_topics = Column(Text, comment="关联知识点（JSON）")
-    chunk_index = Column(Integer, comment="文档块索引")
-    vector_id = Column(String(255), comment="向量库ID")
+    
+    # 🔥 新增：知识点来源标识
+    source_type = Column(String(32), nullable=False, default="public", comment="来源类型：public=公共库, course=课程同步")
+    source_id = Column(Integer, nullable=True, comment="来源ID（如果是课程同步，存储course_knowledge_point.id）")
+    course_id = Column(Integer, ForeignKey("course.id"), nullable=True, comment="所属课程ID（仅课程同步时有值）")
+    
+    is_published = Column(Boolean, default=True, comment="是否发布")
     create_time = Column(TIMESTAMP, nullable=False, server_default=func.now(), comment="创建时间")
     update_time = Column(TIMESTAMP, nullable=False, server_default=func.now(), onupdate=func.now(), comment="更新时间")
 
-    # 关联
-    document = relationship("KnowledgeDocument", back_populates="knowledge_points")
-    user = relationship("SysUser")
+    # 关联（🔥 修复：使用字符串引用，避免前向引用问题）
+    documents = relationship("KnowledgeDocument", secondary=knowledge_document_rel, back_populates="knowledge_points")
     tags = relationship("KnowledgeTag", secondary="knowledge_point_tag_rel", back_populates="points")
-    user_mastery = relationship("UserKnowledgeMastery", back_populates="knowledge_point", cascade="all, delete-orphan")
     exercises = relationship("Exercise", secondary="exercise_knowledge", back_populates="knowledge_points")
-    course_resources = relationship("CourseResource", secondary="course_resource_knowledge_rel", back_populates="knowledge_points")
+    user_mastery = relationship("UserKnowledgeMastery", back_populates="knowledge_point", cascade="all, delete-orphan")
     qa_records = relationship("KnowledgeQaRecord", back_populates="knowledge_point", cascade="all, delete-orphan")
+    course_resources = relationship("CourseResource", secondary=course_resource_knowledge_rel, back_populates="knowledge_points")
 
 
 # ==================== 审核模块模型 ====================

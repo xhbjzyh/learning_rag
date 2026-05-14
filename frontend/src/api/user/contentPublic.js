@@ -101,26 +101,20 @@ export default {
 
   // 下载文档
 downloadDocument(docId, fileName) {
-  const token = localStorage.getItem('token')
+  const token = getToken()
   if (!token) {
     ElMessage.error('请先登录')
     return
   }
 
-  const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
-  const url = `${baseUrl}/api/user/content/public/document/${docId}/download`
-
-  // ✅ 用axios请求，带上Authorization请求头
-  axios({
+  // ✅ 修复：使用相对路径，让request实例自动处理baseURL和token
+  request({
+    url: `/user/content/public/document/${docId}/download`,
     method: 'get',
-    url: url,
-    responseType: 'blob', // 关键：指定响应类型为二进制流
-    headers: {
-      'Authorization': `Bearer ${token}`
-    }
+    responseType: 'blob' // 关键：指定响应类型为二进制流
   }).then(response => {
     // 创建blob对象并触发下载
-    const url = window.URL.createObjectURL(new Blob([response.data]))
+    const url = window.URL.createObjectURL(new Blob([response]))
     const link = document.createElement('a')
     link.href = url
     link.download = fileName

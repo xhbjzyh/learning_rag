@@ -145,10 +145,12 @@ def get_course_list(
         page: int = Query(1, ge=1),
         size: int = Query(10, ge=1, le=100),
         title: Optional[str] = None,
+        category_id: Optional[int] = None,
+        difficulty: Optional[str] = None,
         db: Session = Depends(get_db)
 ):
     try:
-        data = admin_course_service.get_course_list(db, page, size, title)
+        data = admin_course_service.get_course_list(db, page, size, title, category_id, difficulty)
         return {"code": 0, "msg": "获取课程列表成功", "data": data}
     except Exception as e:
         logger.error(f"获取课程列表失败: {str(e)}")
@@ -158,7 +160,26 @@ def get_course_list(
 def create_course(data: AdminCourseCreateRequest, db: Session = Depends(get_db)):
     try:
         course = admin_course_service.create_course(db, data)
-        return {"code": 0, "msg": "创建课程成功", "data": course}
+        
+        # 🔥 返回同步结果
+        response_data = {
+            "id": course.id,
+            "title": course.title,
+            "description": course.description,
+            "cover_url": course.cover_url,
+            "lecturer": course.lecturer,
+            "category_id": course.category_id,
+            "difficulty": course.difficulty,
+            "is_published": course.is_published,
+            "view_count": course.view_count,
+            "create_time": course.create_time.isoformat() if hasattr(course.create_time, 'isoformat') else str(course.create_time),
+        }
+        
+        # 如果有同步结果，添加到响应中
+        if hasattr(course, 'sync_result'):
+            response_data["knowledge_sync"] = course.sync_result
+        
+        return {"code": 0, "msg": "创建课程成功", "data": response_data}
     except HTTPException as e:
         raise e
     except Exception as e:

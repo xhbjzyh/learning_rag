@@ -43,7 +43,7 @@
           <div class="stat-grid">
             <div class="stat-item">
               <div class="stat-value">{{ formatDuration(userProfile.total_study_duration) }}</div>
-              <div class="stat-label">学习总时长（小时）</div>
+              <div class="stat-label">学习总时长</div>
             </div>
             <div class="stat-item">
               <div class="stat-value">{{ userProfile.finished_points_count || 0 }}</div>
@@ -75,7 +75,51 @@
         </div>
       </el-card>
 
-      <!-- 3. 用户画像-强弱标签卡片 -->
+      <!-- 3. 行为统计卡片（新增） -->
+      <el-card class="behavior-stats-card" shadow="hover">
+        <template #header>
+          <div class="card-header">
+            <span class="header-title">
+              <el-icon><TrendCharts /></el-icon>
+              行为统计
+            </span>
+            <el-button size="small" @click="loadBehaviorStats" :loading="loading.behaviorStats">
+              <el-icon><Refresh /></el-icon>
+              刷新
+            </el-button>
+          </div>
+        </template>
+        <div class="behavior-content" v-loading="loading.behaviorStats">
+          <div class="behavior-grid">
+            <div class="behavior-item">
+              <div class="behavior-value">{{ behaviorStats.total_learning_sessions || 0 }}</div>
+              <div class="behavior-label">学习会话数</div>
+            </div>
+            <div class="behavior-item">
+              <div class="behavior-value">{{ formatDuration(behaviorStats.total_study_duration) }}</div>
+              <div class="behavior-label">总学习时长</div>
+            </div>
+            <div class="behavior-item">
+              <div class="behavior-value">{{ Math.round(behaviorStats.average_session_duration / 60) || 0 }}分钟</div>
+              <div class="behavior-label">平均会话时长</div>
+            </div>
+            <div class="behavior-item">
+              <div class="behavior-value">{{ behaviorStats.mastered_points_count || 0 }}</div>
+              <div class="behavior-label">已掌握知识点</div>
+            </div>
+            <div class="behavior-item">
+              <div class="behavior-value">{{ behaviorStats.learning_streak_days || 0 }}天</div>
+              <div class="behavior-label">连续学习</div>
+            </div>
+            <div class="behavior-item">
+              <div class="behavior-value">{{ getPreferredStudyTimeText(behaviorStats.preferred_study_time) }}</div>
+              <div class="behavior-label">偏好学习时间</div>
+            </div>
+          </div>
+        </div>
+      </el-card>
+
+      <!-- 4. 用户画像-强弱标签卡片 -->
       <el-card class="tags-card" shadow="hover">
         <template #header>
           <div class="card-header">
@@ -153,7 +197,55 @@
         </div>
       </el-card>
 
-      <!-- 4. 修改密码卡片 -->
+      <!-- 5. 学习历史卡片（新增） -->
+      <el-card class="history-card" shadow="hover">
+        <template #header>
+          <div class="card-header">
+            <span class="header-title">
+              <el-icon><Clock /></el-icon>
+              学习历史
+            </span>
+            <el-button size="small" @click="loadLearningHistory" :loading="loading.history">
+              <el-icon><Refresh /></el-icon>
+              刷新
+            </el-button>
+          </div>
+        </template>
+        <div class="history-content" v-loading="loading.history">
+          <el-table :data="learningHistory" style="width: 100%" max-height="400">
+            <el-table-column prop="title" label="知识点" min-width="150" show-overflow-tooltip />
+            <el-table-column prop="study_duration" label="学习时长" width="120">
+              <template #default="{ row }">
+                {{ formatDuration(row.study_duration) }}
+              </template>
+            </el-table-column>
+            <el-table-column prop="is_mastered" label="状态" width="100">
+              <template #default="{ row }">
+                <el-tag :type="row.is_mastered ? 'success' : 'info'" size="small">
+                  {{ row.is_mastered ? '已掌握' : '学习中' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="create_time" label="学习时间" width="180">
+              <template #default="{ row }">
+                {{ formatDateTime(row.create_time) }}
+              </template>
+            </el-table-column>
+          </el-table>
+
+          <div class="pagination-wrapper">
+            <el-pagination
+              v-model:current-page="historyPage"
+              :page-size="historyPageSize"
+              :total="historyTotal"
+              layout="total, prev, pager, next"
+              @current-change="handleHistoryPageChange"
+            />
+          </div>
+        </div>
+      </el-card>
+
+      <!-- 6. 修改密码卡片 -->
       <el-card class="password-card" shadow="hover">
         <template #header>
           <div class="card-header">
@@ -219,20 +311,34 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { User, DataAnalysis, Document, Lock, WarningFilled, CircleCheck, Star, InfoFilled, TrendCharts } from '@element-plus/icons-vue'
+import {
+  User, DataAnalysis, Document, Lock, WarningFilled, CircleCheck,
+  Star, InfoFilled, TrendCharts, Refresh, Clock
+} from '@element-plus/icons-vue'
 import userProfileApi from '@/api/user/userProfile.js'
 
 // 加载状态
 const loading = ref({
   info: false,
   profile: false,
-  password: false
+  password: false,
+  behaviorStats: false,
+  history: false
 })
 
 // 用户基本信息
 const userInfo = ref({})
 // 用户画像数据
 const userProfile = ref({})
+
+// 行为统计数据（新增）
+const behaviorStats = ref({})
+
+// 学习历史（新增）
+const learningHistory = ref([])
+const historyPage = ref(1)
+const historyPageSize = ref(10)
+const historyTotal = ref(0)
 
 // 修改密码表单
 const passwordFormRef = ref(null)
@@ -277,28 +383,57 @@ const formatTime = (timestamp) => {
 }
 
 /**
- * 格式化学习时长（自动识别单位，避免异常值）
- * @param {number} duration - 时长（毫秒/秒）
+ * 格式化日期时间
+ * @param {string} dateTime - ISO格式日期时间
  */
-const formatDuration = (duration) => {
-  if (!duration || duration <= 0) return 0
-
-  // 自动识别单位：如果数值过大，说明是毫秒，否则是秒
-  let hours
-  if (duration > 1e9) { // 大于1e9毫秒（约11天），按毫秒计算
-    hours = duration / 1000/1000/1000 / 60 / 60
-  } else { // 否则按秒计算
-    hours = duration / 60 / 60
-  }
-
-  // 限制最大显示9999小时，避免异常值
-  return Math.min(hours, 9999).toFixed(1)
+const formatDateTime = (dateTime) => {
+  if (!dateTime) return '-'
+  const date = new Date(dateTime)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
 }
 
 /**
- * 格式化正确率（限制在0-100%之间）
- * @param {number} score - 正确率（0-1 或 0-100）
+ * 格式化学习时长（智能显示）
+ * @param {number} duration - 时长（秒）
  */
+const formatDuration = (duration) => {
+  if (!duration || duration <= 0) return '0秒'
+
+  // 转换为数字类型（防止字符串）
+  const seconds = Number(duration)
+
+  if (seconds < 60) {
+    // 小于1分钟，显示秒
+    return `${seconds}秒`
+  } else if (seconds < 3600) {
+    // 小于1小时，显示分钟
+    const minutes = Math.floor(seconds / 60)
+    const remainingSeconds = seconds % 60
+    return remainingSeconds > 0
+      ? `${minutes}分${remainingSeconds}秒`
+      : `${minutes}分钟`
+  } else {
+    // 大于1小时，显示小时
+    const hours = Math.floor(seconds / 3600)
+    const minutes = Math.floor((seconds % 3600) / 60)
+    return minutes > 0 ? `${hours}小时${minutes}分钟` : `${hours}小时`
+  }
+}
+
+/**
+ * 获取偏好学习时间文本
+ * @param {string} time - morning/afternoon/evening/night
+ */
+const getPreferredStudyTimeText = (time) => {
+  const timeMap = {
+    morning: '上午',
+    afternoon: '下午',
+    evening: '晚上',
+    night: '深夜'
+  }
+  return timeMap[time] || '未设置'
+}
+
 /**
  * 格式化正确率（适配满分10分的得分）
  * @param {number} score - 得分（0-10分，满分10分）
@@ -323,12 +458,6 @@ const getProgressStatus = (score) => {
   return 'exception'
 }
 
-/**
- * 获取进度条状态
- * @param {number} score - 正确率
- */
-
-
 // ==============================================
 // 接口请求
 // ==============================================
@@ -351,8 +480,19 @@ const loadUserProfile = async () => {
   loading.value.profile = true
   try {
     const res = await userProfileApi.getUserProfile()
+    console.log('=== 用户画像API响应 ===')
+    console.log('完整响应:', res)
+    console.log('响应code:', res.code)
+    console.log('响应data:', res.data)
+    console.log('total_study_duration:', res.data?.total_study_duration)
+    console.log('total_study_duration类型:', typeof res.data?.total_study_duration)
+
     if (res.code === 0 && res.data) {
       userProfile.value = res.data
+      console.log('赋值后的userProfile:', userProfile.value)
+      console.log('赋值后的total_study_duration:', userProfile.value.total_study_duration)
+    } else {
+      console.error('API返回异常:', res)
     }
   } catch (error) {
     console.error('获取用户画像失败:', error)
@@ -360,6 +500,49 @@ const loadUserProfile = async () => {
   } finally {
     loading.value.profile = false
   }
+}
+
+// 加载行为统计（新增）
+const loadBehaviorStats = async () => {
+  loading.value.behaviorStats = true
+  try {
+    const res = await userProfileApi.getBehaviorStats()
+    if (res.code === 0 && res.data) {
+      behaviorStats.value = res.data
+      console.log('行为统计数据:', behaviorStats.value)
+    }
+  } catch (error) {
+    console.error('获取行为统计失败:', error)
+    ElMessage.error('获取行为统计失败')
+  } finally {
+    loading.value.behaviorStats = false
+  }
+}
+
+// 加载学习历史（新增）
+const loadLearningHistory = async () => {
+  loading.value.history = true
+  try {
+    const res = await userProfileApi.getLearningHistory({
+      page: historyPage.value,
+      limit: historyPageSize.value
+    })
+    if (res.code === 0 && res.data) {
+      learningHistory.value = res.data.list
+      historyTotal.value = res.data.total
+    }
+  } catch (error) {
+    console.error('获取学习历史失败:', error)
+    ElMessage.error('获取学习历史失败')
+  } finally {
+    loading.value.history = false
+  }
+}
+
+// 学习历史分页切换
+const handleHistoryPageChange = (page) => {
+  historyPage.value = page
+  loadLearningHistory()
 }
 
 const handleUpdatePassword = async () => {
@@ -386,6 +569,8 @@ const resetPasswordForm = () => {
 onMounted(() => {
   loadUserInfo()
   loadUserProfile()
+  loadBehaviorStats()
+  loadLearningHistory()
 })
 </script>
 
@@ -540,6 +725,42 @@ onMounted(() => {
   font-weight: 500;
 }
 
+/* 行为统计卡片（新增） */
+.behavior-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+.behavior-item {
+  text-align: center;
+  padding: 16px;
+  background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+  border-radius: 10px;
+  transition: all 0.3s ease;
+}
+
+.behavior-item:nth-child(odd) {
+  background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%);
+}
+
+.behavior-item:hover {
+  transform: scale(1.05);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.15);
+}
+
+.behavior-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: #303133;
+  margin-bottom: 6px;
+}
+
+.behavior-label {
+  font-size: 12px;
+  color: #606266;
+}
+
 /* 知识点分析卡片 */
 .tags-content {
   display: flex;
@@ -601,6 +822,17 @@ onMounted(() => {
   font-size: 16px;
 }
 
+/* 学习历史卡片（新增） */
+.history-content {
+  padding: 8px 0;
+}
+
+.pagination-wrapper {
+  margin-top: 16px;
+  display: flex;
+  justify-content: center;
+}
+
 /* 修改密码卡片 */
 .password-content {
   max-width: 500px;
@@ -629,6 +861,10 @@ onMounted(() => {
 
   .stat-grid {
     grid-template-columns: 1fr;
+  }
+
+  .behavior-grid {
+    grid-template-columns: repeat(2, 1fr);
   }
 
   .page-title {

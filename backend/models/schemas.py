@@ -25,6 +25,29 @@ class SuccessResponse(BaseSchema, Generic[T]):
     msg: str = "success"
     data: Optional[T] = None
 
+# ==================== 系统配置模块 ====================
+class SystemConfigCreate(BaseSchema):
+    config_key: str = Field(min_length=1, max_length=64)
+    config_value: Optional[str] = None
+    config_type: str = Field(default="string", pattern="^(string|int|bool|json)$")
+    description: Optional[str] = Field(None, max_length=255)
+
+class SystemConfigUpdate(BaseSchema):
+    config_value: Optional[str] = None
+    config_type: Optional[str] = Field(None, pattern="^(string|int|bool|json)$")
+    description: Optional[str] = Field(None, max_length=255)
+    is_enabled: Optional[bool] = None
+
+class SystemConfigResponse(BaseSchema):
+    id: int
+    config_key: str
+    config_value: Optional[str]
+    config_type: str
+    description: Optional[str]
+    is_enabled: bool
+    create_time: Optional[datetime] = None
+    update_time: Optional[datetime] = None
+
 # ==================== 用户模块 ====================
 class UserRegisterRequest(BaseSchema):
     username: str = Field(min_length=3, max_length=32)
@@ -126,18 +149,22 @@ class KnowledgePointUpdate(BaseSchema):
     common_mistakes: Optional[str] = None
 
 class KnowledgePointResponse(BaseSchema):
+    """知识点响应（与数据库模型保持一致）"""
     id: int
-    doc_id: int
-    user_id: int
     title: str
     content: str
-    key_points: Optional[str]
+    key_points: Optional[str] = None
     difficulty: str
-    pre_knowledge: Optional[str]
-    common_mistakes: Optional[str]
+    source_type: str = "public"
+    source_id: Optional[int] = None
+    course_id: Optional[int] = None
+    is_published: bool = True
     vector_id: Optional[str] = None
     create_time: Optional[datetime] = None
     update_time: Optional[datetime] = None
+    
+    class Config:
+        from_attributes = True
 
 # ==================== 🔥 课程专属知识点（独立体系 | 新增全套） ====================
 class CourseKnowledgePointCreate(BaseSchema):
@@ -595,9 +622,145 @@ class KnowledgeQaResponse(BaseSchema):
     create_time: Optional[datetime] = None
     update_time: Optional[datetime] = None
 
+# ==================== 用户反馈模块（新增） ====================
+class UserFeedbackCreate(BaseSchema):
+    """用户反馈创建模型"""
+    point_id: Optional[int] = Field(None, description="知识点ID")
+    course_id: Optional[int] = Field(None, description="课程ID")
+    feedback_type: str = Field(description="反馈类型: like/dislike/comment/suggestion/report")
+    content: str = Field(min_length=1, max_length=500, description="反馈内容")
+    rating: Optional[int] = Field(None, ge=1, le=5, description="评分1-5")
+
+class UserFeedbackResponse(BaseSchema):
+    """用户反馈响应模型"""
+    id: int
+    user_id: int
+    point_id: Optional[int]
+    course_id: Optional[int]
+    feedback_type: str
+    content: str
+    create_time: Optional[datetime] = None
+
+# ==================== 学习会话记录（新增） ====================
+class LearningSessionCreate(BaseSchema):
+    """学习会话创建模型"""
+    point_id: int = Field(description="知识点ID")
+    duration: int = Field(ge=0, description="学习时长（秒）")
+    is_mastered: bool = Field(default=False, description="是否掌握")
+    session_type: str = Field(default="study", description="会话类型: study/review/practice")
+    notes: Optional[str] = Field(None, max_length=500, description="学习笔记")
+
+class LearningSessionResponse(BaseSchema):
+    """学习会话响应模型"""
+    id: int
+    user_id: int
+    point_id: int
+    study_duration: int
+    is_mastered: int
+    create_time: Optional[datetime] = None
+
+# ==================== 推荐反馈（新增） ====================
+class RecommendationFeedbackCreate(BaseSchema):
+    """推荐反馈模型"""
+    recommendation_id: int = Field(description="推荐记录ID")
+    is_clicked: bool = Field(description="是否点击")
+    is_helpful: Optional[bool] = Field(None, description="是否有用")
+    feedback_score: Optional[int] = Field(None, ge=1, le=5, description="反馈评分")
+
+# ==================== 个性化推荐（第二阶段新增） ====================
+class PersonalizedRecommendationRequest(BaseSchema):
+    """个性化推荐请求"""
+    query: Optional[str] = Field(None, max_length=200, description="搜索关键词")
+    limit: int = Field(default=10, ge=1, le=50, description="返回数量")
+
+class RecommendationItemResponse(BaseSchema):
+    """推荐项响应"""
+    course_id: int
+    course_title: str
+    score: float
+    final_score: float
+    reason: str
+    recommend_type: str  # collaborative_filtering / content_based / profile_based / hybrid
+    weight: float
+
+class PersonalizedRecommendationResponse(BaseSchema):
+    """个性化推荐响应"""
+    recommendations: List[RecommendationItemResponse]
+    total: int
+
+class SimilarCoursesRequest(BaseSchema):
+    """相似课程请求"""
+    course_id: int = Field(description="课程ID")
+    limit: int = Field(default=5, ge=1, le=20, description="返回数量")
+
+# ==================== 用户行为统计（新增） ====================
+class UserBehaviorStatsResponse(BaseSchema):
+    """用户行为统计响应"""
+    total_learning_sessions: int
+    total_study_duration: int
+    average_session_duration: float
+    mastered_points_count: int
+    learning_streak_days: int
+    most_active_hour: int
+    preferred_study_time: str  # morning/afternoon/evening/night
+    recent_activity: List[dict] = []
+
 # ==================== 通用分页响应 ====================
 class PageResponse(BaseSchema, Generic[T]):
     total: int
     list: List[T]
     page: int
     size: int
+
+
+# ==================== 🔥 习题管理（新增） ====================
+class ExerciseOptionCreate(BaseSchema):
+    """习题选项创建"""
+    option_content: str = Field(min_length=1, description="选项内容")
+    is_correct: bool = Field(default=False, description="是否正确选项")
+    order: int = Field(default=0, description="选项顺序")
+
+class ExerciseCreate(BaseSchema):
+    """习题创建请求"""
+    title: str = Field(min_length=1, max_length=255, description="习题标题/题干")
+    type: str = Field(default="single_choice", description="题型：single_choice/multiple_choice/true_false/fill_blank/essay")
+    difficulty: str = Field(default="medium", description="难度：easy/medium/hard")
+    answer: Optional[str] = Field(None, description="标准答案（可选，如果没有则从选项中提取）")
+    analysis: Optional[str] = Field(None, description="解析")
+    score: float = Field(default=10.0, ge=0, description="分值")
+    course_knowledge_ids: Optional[List[int]] = Field(None, description="关联的课程知识点ID列表")
+    options: Optional[List[ExerciseOptionCreate]] = Field(None, description="选项列表（选择题必填）")
+
+class ExerciseUpdate(BaseSchema):
+    """习题更新请求"""
+    title: Optional[str] = Field(None, min_length=1, max_length=255, description="习题标题")
+    type: Optional[str] = Field(None, description="题型")
+    difficulty: Optional[str] = Field(None, description="难度")
+    answer: Optional[str] = Field(None, description="标准答案")
+    analysis: Optional[str] = Field(None, description="解析")
+    score: Optional[float] = Field(None, ge=0, description="分值")
+    course_knowledge_ids: Optional[List[int]] = Field(None, description="关联的课程知识点ID列表")
+    options: Optional[List[ExerciseOptionCreate]] = Field(None, description="选项列表")
+
+class ExerciseOptionResponse(BaseSchema):
+    """习题选项响应"""
+    id: int
+    exercise_id: int
+    content: str
+    is_correct: bool
+    order: int
+
+class ExerciseResponse(BaseSchema):
+    """习题响应"""
+    id: int
+    course_id: int
+    title: str
+    type: str
+    difficulty: str
+    answer: Optional[str]
+    analysis: Optional[str]
+    score: float
+    create_time: Optional[datetime] = None
+    update_time: Optional[datetime] = None
+    course_knowledge_points: Optional[List[dict]] = []
+    options: Optional[List[ExerciseOptionResponse]] = []

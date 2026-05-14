@@ -105,7 +105,7 @@ def get_course_list(
         raise HTTPException(status_code=500, detail="获取课程列表失败")
 
 
-@router.get("/course/{course_id}", summary="获取课程详情及用户学习进度")
+@router.get("/{course_id}", summary="获取课程详情及用户学习进度")
 def get_course_detail(
         course_id: int,
         current_user: SysUser = Depends(get_current_user),

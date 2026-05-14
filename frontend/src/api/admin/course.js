@@ -12,7 +12,7 @@ const courseApi = {
     return request.put(`/admin/course/categories/${id}`, data)
   },
   deleteCourseCategory(id) {
-    return request.delete(`/admin/course/categories/${id}`, data)
+    return request.delete(`/admin/course/categories/${id}`)
   },
   getCourseDetail(id) {
     return request.get(`/admin/course/${id}`)
@@ -29,7 +29,7 @@ const courseApi = {
     return request.put(`/admin/course/update/${id}`, data)
   },
   deleteCourse(id) {
-    return request.delete(`/admin/course/delete/${id}`, data)
+    return request.delete(`/admin/course/delete/${id}`)  // 🔥 修复：DELETE 不需要 data 参数
   },
 
   // ==================== 课程资料列表（文档/视频/习题） ====================

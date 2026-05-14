@@ -22,7 +22,7 @@ const courseApi = {
   // 获取课程详情
   getCourseDetail(courseId) {
     return request({
-      url: `/user/course/course/${courseId}`,
+      url: `/user/course/${courseId}`,
       method: 'get'
     })
   },
@@ -39,7 +39,7 @@ const courseApi = {
   // 更新课程进度
   updateCourseProgress(data) {
     return request({
-      url: `/user/course/course/${data.course_id}/progress`,
+      url: `/user/course/${data.course_id}/progress`,
       method: 'post',
       params: {
         progress: data.progress,
