@@ -1,6 +1,6 @@
 """
 初始化系统配置
-运行此脚本会在数据库中创建默认的大模型配置
+运行此脚本会在数据库中创建默认的大模型配置和RAG Prompt模板
 """
 import sys
 from pathlib import Path
@@ -25,15 +25,25 @@ def init_system_config():
             'llm.provider',
             'llm.api_key', 
             'llm.model_name',
-            'llm.timeout'
+            'llm.timeout',
+            'rag.top_k',
+            'rag.similarity_threshold',
+            'rag.max_context_length',
+            'rag.prompt.system_with_history',  # 🔥 新增
+            'rag.prompt.system_without_history',  # 🔥 新增
+            'rag.prompt.fallback'  # 🔥 新增
         ]
         
         print("\n已创建的配置：")
         for key in configs:
             config = system_config_service.get_config(db, key)
             if config:
-                value = config.config_value if key != 'llm.api_key' else '***'
-                print(f"  - {key}: {value}")
+                value = config.config_value if 'api_key' not in key else '***'
+                # 对于Prompt模板，显示长度
+                if 'prompt' in key and value:
+                    print(f"  - {key}: {len(value)}字符")
+                else:
+                    print(f"  - {key}: {value}")
             else:
                 print(f"  - {key}: ❌ 未找到")
                 

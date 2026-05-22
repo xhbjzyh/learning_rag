@@ -566,6 +566,9 @@ class UserProfileService:
 
     def get_complete_user_profile(self, db: Session, user_id: int) -> Dict:
         """获取完整用户画像（答题画像 + 行为画像）"""
+        # 🔥 论文第2.4.3节：先应用掌握度衰减
+        self._apply_mastery_decay_to_all(db, user_id)
+        
         # 1. 获取答题画像（原有功能）
         answer_profile = self.answer_service.get_user_answer_profile(user_id, db)
 
@@ -577,6 +580,74 @@ class UserProfileService:
             **answer_profile,
             "behavior_profile": behavior_profile
         }
+
+    def _apply_mastery_decay_to_all(self, db: Session, user_id: int):
+        """
+        对用户的所有掌握度应用衰减（论文第2.4.3节）
+        
+        公式：S_t = S_0 * e^(λt)
+        其中 λ = -0.05/天（衰减系数）
+        
+        实际实现：mastery_score * 0.95 ** days
+        （数学上等价于 e^(-0.0513 * days) ≈ 0.95^days）
+        """
+        import math
+        from datetime import datetime
+        
+        masteries = db.query(UserKnowledgeMastery).filter(
+            UserKnowledgeMastery.user_id == user_id,
+            UserKnowledgeMastery.mastery_score > 0  # 只对已有掌握度的应用衰减
+        ).all()
+        
+        decay_rate = -0.05  # 每天衰减5%
+        updated_count = 0
+        
+        for mastery in masteries:
+            if not mastery.update_time:
+                continue
+            
+            # 计算距离上次更新的天数
+            last_update = mastery.update_time
+            if isinstance(last_update, datetime):
+                days_since_update = (datetime.now() - last_update).days
+            else:
+                try:
+                    last_update_dt = datetime.strptime(str(last_update), "%Y-%m-%d %H:%M:%S")
+                    days_since_update = (datetime.now() - last_update_dt).days
+                except:
+                    continue
+            
+            if days_since_update <= 0:
+                continue
+            
+            # 应用衰减公式：S_t = S_0 * e^(λt)
+            old_score = mastery.mastery_score
+            decay_factor = math.exp(decay_rate * days_since_update)
+            
+            # 或者使用简化版本：S_t = S_0 * 0.95^days
+            # decay_factor = 0.95 ** days_since_update
+            
+            new_score = old_score * decay_factor
+            
+            # 确保不低于0
+            mastery.mastery_score = max(0, new_score)
+            
+            # 更新等级
+            if mastery.mastery_score < 40:
+                mastery.level = "未掌握"
+            elif mastery.mastery_score < 70:
+                mastery.level = "基本掌握"
+            else:
+                mastery.level = "已掌握"
+            
+            updated_count += 1
+            
+            logger.debug(f"📉 掌握度衰减: 知识点{mastery.knowledge_point_id}, "
+                        f"{days_since_update}天, {old_score:.1f} → {new_score:.1f}")
+        
+        if updated_count > 0:
+            db.commit()
+            logger.info(f"✅ 已对用户 {user_id} 的 {updated_count} 个知识点应用掌握度衰减")
 
     def _get_user_behavior_profile(self, db: Session, user_id: int) -> Dict:
         """获取用户行为画像"""
@@ -619,8 +690,88 @@ user_behavior_service = UserBehaviorService()
 
 # ==================== 增强行为服务（第一阶段优化）====================
 class EnhancedBehaviorService:
-    """增强的行为服务，用于记录完整的学习会话"""
+    """增强行为服务（第一阶段优化）"""
     
+    def __init__(self):
+        self.behavior_service = UserBehaviorService()
+    
+    # 🔥 新增：掌握度衰减计算（论文第2.4.3节）
+    def _apply_mastery_decay(self, db: Session, user_id: int, mastery: UserKnowledgeMastery):
+        """
+        应用掌握度衰减公式（论文第2.4.3节）
+        
+        公式：S_t = S_0 * e^(λt)
+        
+        其中：
+        - S_t: t时刻的掌握度
+        - S_0: 初始掌握度（上次学习时的掌握度）
+        - λ: 衰减系数（负数），默认为-0.05/天
+        - t: 距离上次学习的天数
+        
+        实际实现：mastery_score * 0.95 ** days
+        （数学上等价于 e^(-0.0513 * days) ≈ 0.95^days）
+        """
+        import math
+        from datetime import datetime
+        
+        # 获取衰减系数（默认-0.05/天）
+        decay_rate = -0.05
+        
+        # 计算距离上次学习的时间（天数）
+        if mastery.update_time:
+            last_update = mastery.update_time
+            if isinstance(last_update, datetime):
+                days_since_update = (datetime.now() - last_update).days
+            else:
+                # 如果是字符串，需要转换
+                last_update_dt = datetime.strptime(str(last_update), "%Y-%m-%d %H:%M:%S")
+                days_since_update = (datetime.now() - last_update_dt).days
+        else:
+            # 如果没有更新时间，假设是昨天
+            days_since_update = 1
+        
+        # 应用衰减公式：S_t = S_0 * e^(λt)
+        decay_factor = math.exp(decay_rate * days_since_update)
+        
+        # 或者使用简化版本：S_t = S_0 * 0.95^days
+        # decay_factor = 0.95 ** days_since_update
+        
+        # 更新掌握度
+        old_score = mastery.mastery_score
+        new_score = old_score * decay_factor
+        
+        # 确保不低于0
+        mastery.mastery_score = max(0, new_score)
+        
+        # 更新等级
+        if mastery.mastery_score < 40:
+            mastery.level = "未掌握"
+        elif mastery.mastery_score < 70:
+            mastery.level = "基本掌握"
+        else:
+            mastery.level = "已掌握"
+        
+        logger.info(f"📉 掌握度衰减: 用户{user_id}, 知识点{mastery.knowledge_point_id}, "
+                   f"{days_since_update}天, {old_score:.1f} → {new_score:.1f} "
+                   f"(衰减系数: {decay_factor:.3f})")
+    
+    def apply_decay_to_all_mastery(self, db: Session, user_id: int):
+        """
+        对用户的所有掌握度应用衰减
+        
+        建议在每次查询用户画像时调用此方法，确保掌握度反映最新状态
+        """
+        masteries = db.query(UserKnowledgeMastery).filter(
+            UserKnowledgeMastery.user_id == user_id,
+            UserKnowledgeMastery.mastery_score > 0  # 只对已有掌握度的应用衰减
+        ).all()
+        
+        for mastery in masteries:
+            self._apply_mastery_decay(db, user_id, mastery)
+        
+        db.commit()
+        logger.info(f"✅ 已对用户 {user_id} 的 {len(masteries)} 个知识点应用掌握度衰减")
+
     def record_learning_session(self, db: Session, user_id: int, session_data: dict):
         """
         记录学习会话
@@ -672,302 +823,30 @@ class EnhancedBehaviorService:
     
     def get_smart_recommendations(self, db: Session, user_id: int, limit: int = 5) -> list:
         """
-        🔥 第五步核心功能：智能推荐（混合策略）
-        综合多种推荐算法，提供个性化课程推荐
+        🔥 第五步核心功能：智能推荐（混合策略 - 论文第4.3节实现）
+        
+        统一使用HybridRecommender，实现：
+        - 协同过滤（User-CF）
+        - 内容推荐（Content-Based）
+        - 用户画像推荐
+        - 动态权重调整
+        
+        替代旧的简单规则推荐（薄弱知识点、兴趣标签等）
         """
-        from models.db_models import Course, UserKnowledgeMastery, KnowledgePoint
+        from core.hybrid_recommender import HybridRecommender
         
-        recommendations = []
-        
-        # 1. 基于薄弱知识点的推荐（权重 40%）
-        weak_point_recs = self._recommend_by_weak_points(db, user_id, limit=limit)
-        recommendations.extend(weak_point_recs)
-        
-        # 2. 基于兴趣标签的推荐（权重 30%）
-        interest_recs = self._recommend_by_interest_tags(db, user_id, limit=limit)
-        recommendations.extend(interest_recs)
-        
-        # 3. 基于学习路径的推荐（权重 20%）
-        path_recs = self._recommend_by_learning_path(db, user_id, limit=limit)
-        recommendations.extend(path_recs)
-        
-        # 4. 热门推荐作为补充（权重 10%）
-        hot_recs = self._recommend_hot_courses(db, user_id, limit=2)
-        recommendations.extend(hot_recs)
-        
-        # 5. 去重并排序
-        final_recs = self._merge_and_rank_recommendations(recommendations, limit)
-        
-        return final_recs
-    
-    def _recommend_by_weak_points(self, db: Session, user_id: int, limit: int) -> list:
-        """基于薄弱知识点推荐相关课程"""
-        from models.db_models import UserKnowledgeMastery, KnowledgePoint, Course, CourseResource
-        
-        # 获取掌握度低于60分的知识点
-        weak_masteries = db.query(UserKnowledgeMastery).filter(
-            UserKnowledgeMastery.user_id == user_id,
-            UserKnowledgeMastery.mastery_score < 60
-        ).order_by(
-            UserKnowledgeMastery.mastery_score.asc()
-        ).limit(limit * 2).all()
-        
-        if not weak_masteries:
+        try:
+            recommender = HybridRecommender(db)
+            recommendations = recommender.get_personalized_recommendations(
+                user_id=user_id,
+                limit=limit
+            )
+            
+            logger.info(f"✅ 为用户 {user_id} 生成 {len(recommendations)} 个混合推荐")
+            return recommendations
+        except Exception as e:
+            logger.error(f"❌ 智能推荐失败: {str(e)}")
             return []
-        
-        recommendations = []
-        seen_course_ids = set()
-        
-        for mastery in weak_masteries:
-            # 获取知识点信息
-            point = db.query(KnowledgePoint).filter(
-                KnowledgePoint.id == mastery.knowledge_point_id
-            ).first()
-            
-            if not point:
-                continue
-            
-            # 查找包含该知识点的课程资源
-            resources = db.query(CourseResource).filter(
-                CourseResource.knowledge_points.any(KnowledgePoint.id == point.id)
-            ).all()
-            
-            for resource in resources:
-                if resource.course_id in seen_course_ids:
-                    continue
-                
-                course = db.query(Course).filter(Course.id == resource.course_id).first()
-                
-                if not course or not course.is_published:
-                    continue
-                
-                seen_course_ids.add(course.id)
-                
-                # 计算推荐分数（基于薄弱程度）
-                weakness_score = (60 - mastery.mastery_score) / 60  # 0-1
-                score = round(weakness_score * 100, 2)
-                
-                recommendations.append({
-                    "course_id": course.id,
-                    "course_title": course.title,
-                    "cover_url": course.cover_url,
-                    "difficulty": course.difficulty,
-                    "score": score,
-                    "weight": 0.4,
-                    "final_score": round(score * 0.4, 2),
-                    "reason": f"帮助你加强「{point.title}」知识点（当前掌握度：{mastery.mastery_score}分）",
-                    "recommend_type": "weak_point",
-                    "related_point": point.title,
-                    "current_mastery": mastery.mastery_score
-                })
-                
-                if len(recommendations) >= limit:
-                    break
-            
-            if len(recommendations) >= limit:
-                break
-        
-        return recommendations
-    
-    def _recommend_by_interest_tags(self, db: Session, user_id: int, limit: int) -> list:
-        """基于兴趣标签推荐课程"""
-        from models.db_models import UserInterestTag, CourseTag, CourseTagRel, Course
-        
-        # 获取用户兴趣标签（权重最高的5个）
-        interest_tags = db.query(UserInterestTag).filter(
-            UserInterestTag.user_id == user_id
-        ).order_by(
-            UserInterestTag.weight.desc()
-        ).limit(5).all()
-        
-        if not interest_tags:
-            return []
-        
-        tag_ids = [t.tag_id for t in interest_tags]
-        
-        # 查找匹配这些标签的课程
-        courses = db.query(Course).join(
-            CourseTagRel, Course.id == CourseTagRel.course_id
-        ).filter(
-            CourseTagRel.tag_id.in_(tag_ids),
-            Course.is_published == True
-        ).order_by(
-            CourseTagRel.weight.desc()
-        ).limit(limit * 2).all()
-        
-        recommendations = []
-        seen_course_ids = set()
-        
-        for course in courses:
-            if course.id in seen_course_ids:
-                continue
-            
-            seen_course_ids.add(course.id)
-            
-            # 计算匹配的兴趣标签
-            matched_tags = db.query(UserInterestTag, CourseTagRel.weight).join(
-                CourseTagRel, UserInterestTag.tag_id == CourseTagRel.tag_id
-            ).filter(
-                UserInterestTag.user_id == user_id,
-                CourseTagRel.course_id == course.id
-            ).all()
-            
-            # 计算推荐分数
-            avg_interest = sum(t.UserInterestTag.weight for t in matched_tags) / len(matched_tags) if matched_tags else 0
-            score = round(avg_interest * 100, 2)
-            
-            # 获取匹配的标签名称
-            tag_names = [t.CourseTagRel.tag.name for t in matched_tags[:3]]
-            
-            recommendations.append({
-                "course_id": course.id,
-                "course_title": course.title,
-                "cover_url": course.cover_url,
-                "difficulty": course.difficulty,
-                "score": score,
-                "weight": 0.3,
-                "final_score": round(score * 0.3, 2),
-                "reason": f"符合你的兴趣：{'、'.join(tag_names)}",
-                "recommend_type": "interest_based",
-                "matched_tags": tag_names
-            })
-            
-            if len(recommendations) >= limit:
-                break
-        
-        return recommendations
-    
-    def _recommend_by_learning_path(self, db: Session, user_id: int, limit: int) -> list:
-        """基于学习路径推荐（循序渐进）"""
-        from models.db_models import UserKnowledgeMastery, KnowledgePoint, Course, CourseResource
-        
-        # 获取已掌握基础但未精通的知识点（30-80分）
-        progressing_masteries = db.query(UserKnowledgeMastery).filter(
-            UserKnowledgeMastery.user_id == user_id,
-            UserKnowledgeMastery.mastery_score >= 30,
-            UserKnowledgeMastery.mastery_score < 80
-        ).order_by(
-            UserKnowledgeMastery.mastery_score.asc()
-        ).limit(limit * 2).all()
-        
-        if not progressing_masteries:
-            return []
-        
-        recommendations = []
-        seen_course_ids = set()
-        
-        for mastery in progressing_masteries:
-            point = db.query(KnowledgePoint).filter(
-                KnowledgePoint.id == mastery.knowledge_point_id
-            ).first()
-            
-            if not point:
-                continue
-            
-            # 查找进阶课程
-            resources = db.query(CourseResource).filter(
-                CourseResource.knowledge_points.any(KnowledgePoint.id == point.id)
-            ).all()
-            
-            for resource in resources:
-                if resource.course_id in seen_course_ids:
-                    continue
-                
-                course = db.query(Course).filter(
-                    Course.id == resource.course_id,
-                    Course.is_published == True
-                ).first()
-                
-                if not course:
-                    continue
-                
-                seen_course_ids.add(course.id)
-                
-                # 计算推荐分数（基于进步空间）
-                progress_space = 80 - mastery.mastery_score
-                score = round((progress_space / 50) * 100, 2)
-                
-                recommendations.append({
-                    "course_id": course.id,
-                    "course_title": course.title,
-                    "cover_url": course.cover_url,
-                    "difficulty": course.difficulty,
-                    "score": score,
-                    "weight": 0.2,
-                    "final_score": round(score * 0.2, 2),
-                    "reason": f"继续提升「{point.title}」（当前{mastery.mastery_score}分，目标80分）",
-                    "recommend_type": "learning_path",
-                    "related_point": point.title,
-                    "current_mastery": mastery.mastery_score,
-                    "target_mastery": 80
-                })
-                
-                if len(recommendations) >= limit:
-                    break
-            
-            if len(recommendations) >= limit:
-                break
-        
-        return recommendations
-    
-    def _recommend_hot_courses(self, db: Session, user_id: int, limit: int) -> list:
-        """热门推荐（作为补充）"""
-        from models.db_models import Course, UserCourseProgress
-        
-        # 🔥 修复：使用 UserCourseProgress 来获取用户已学习的课程
-        learned_course_ids = db.query(UserCourseProgress.course_id).filter(
-            UserCourseProgress.user_id == user_id
-        ).distinct().all()
-        
-        learned_ids = [c[0] for c in learned_course_ids] if learned_course_ids else []
-        
-        hot_courses = db.query(Course).filter(
-            Course.is_published == True,
-            ~Course.id.in_(learned_ids) if learned_ids else True
-        ).order_by(
-            Course.view_count.desc()
-        ).limit(limit).all()
-        
-        recommendations = []
-        
-        for course in hot_courses:
-            recommendations.append({
-                "course_id": course.id,
-                "course_title": course.title,
-                "cover_url": course.cover_url,
-                "difficulty": course.difficulty,
-                "score": 70.0,
-                "weight": 0.1,
-                "final_score": 7.0,
-                "reason": f"热门课程（{course.view_count}人学习）",
-                "recommend_type": "hot",
-                "view_count": course.view_count
-            })
-        
-        return recommendations
-    
-    def _merge_and_rank_recommendations(self, recommendations: list, limit: int) -> list:
-        """合并并排序推荐结果"""
-        if not recommendations:
-            return []
-        
-        # 按 final_score 降序排序
-        recommendations.sort(key=lambda x: x.get('final_score', 0), reverse=True)
-        
-        # 去重（基于 course_id）
-        seen_course_ids = set()
-        unique_recs = []
-        
-        for rec in recommendations:
-            course_id = rec.get('course_id')
-            if course_id and course_id not in seen_course_ids:
-                seen_course_ids.add(course_id)
-                unique_recs.append(rec)
-            
-            if len(unique_recs) >= limit:
-                break
-        
-        return unique_recs[:limit]
     
     def get_user_behavior_analysis(self, db: Session, user_id: int) -> dict:
         """

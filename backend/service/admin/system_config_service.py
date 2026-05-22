@@ -126,6 +126,25 @@ class SystemConfigService:
                 "config_value": "32",
                 "config_type": "int",
                 "description": "向量化批处理大小"
+            },
+            # 🔥 RAG Prompt模板配置（论文4.2.2节）
+            {
+                "config_key": "rag.prompt.system_with_history",
+                "config_value": "你是专业学习助手，基于知识点和对话历史回答问题，不编造。\n参考知识点：\n{context_text}\n\n规则：\n1. 参考之前的对话历史，保持对话连贯性\n2. 如果有知识点，基于知识点回答；如果没有，直接回答\n3. 分点作答、专业清晰",
+                "config_type": "string",
+                "description": "RAG系统提示词模板（有历史对话）- 支持{context_text}占位符"
+            },
+            {
+                "config_key": "rag.prompt.system_without_history",
+                "config_value": "你是专业学习助手，基于知识点回答问题，不编造。\n参考知识点：\n{context_text}\n规则：分点作答、专业清晰",
+                "config_type": "string",
+                "description": "RAG系统提示词模板（无历史对话）- 支持{context_text}占位符"
+            },
+            {
+                "config_key": "rag.prompt.fallback",
+                "config_value": "你是专业学习助手，直接回答用户问题",
+                "config_type": "string",
+                "description": "RAG知识库为空时的兜底提示词"
             }
         ]
 

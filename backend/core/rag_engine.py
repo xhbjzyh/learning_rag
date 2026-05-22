@@ -24,25 +24,54 @@ class RAGEngine:
             "similarity_threshold": 0.7,
             "max_context_length": 4000,
             "batch_size": 32,
-            "include_course_knowledge": True  # 🔥 新增：是否包含课程知识点
+            "include_course_knowledge": True,  # 🔥 新增：是否包含课程知识点
+            # 🔥 Prompt模板配置（从数据库动态加载）
+            "prompt_system_with_history": (
+                "你是专业学习助手，基于知识点和对话历史回答问题，不编造。\n"
+                "参考知识点：\n{context_text}\n\n"
+                "规则：\n"
+                "1. 参考之前的对话历史，保持对话连贯性\n"
+                "2. 如果有知识点，基于知识点回答；如果没有，直接回答\n"
+                "3. 分点作答、专业清晰"
+            ),
+            "prompt_system_without_history": (
+                "你是专业学习助手，基于知识点回答问题，不编造。\n"
+                "参考知识点：\n{context_text}\n"
+                "规则：分点作答、专业清晰"
+            ),
+            "prompt_fallback": "你是专业学习助手，直接回答用户问题"
         }
         
         logger.info("✅ RAG引擎初始化完成（向量库将在首次使用时加载）")
 
     def _load_config_from_db(self):
-        """🔥 从数据库加载RAG配置"""
+        """🔥 从数据库加载RAG配置（包括Prompt模板）"""
         try:
             from db.sqlite_conn import SessionLocal
             from service.admin.system_config_service import system_config_service
             
             db = SessionLocal()
             
-            # 加载配置
+            # 加载基础配置
             top_k = system_config_service.get_config_value(db, "rag.top_k", "5")
             threshold = system_config_service.get_config_value(db, "rag.similarity_threshold", "0.7")
             max_context = system_config_service.get_config_value(db, "rag.max_context_length", "4000")
             batch_size = system_config_service.get_config_value(db, "embedding.batch_size", "32")
             include_course = system_config_service.get_config_value(db, "rag.include_course_knowledge", "true")
+            
+            # 🔥 加载Prompt模板配置（论文4.2.2节）
+            prompt_with_history = system_config_service.get_config_value(
+                db, 
+                "rag.prompt.system_with_history"
+            )
+            prompt_without_history = system_config_service.get_config_value(
+                db, 
+                "rag.prompt.system_without_history"
+            )
+            prompt_fallback = system_config_service.get_config_value(
+                db, 
+                "rag.prompt.fallback"
+            )
             
             # 更新缓存
             self._config_cache["top_k"] = int(top_k) if top_k.isdigit() else 5
@@ -51,7 +80,16 @@ class RAGEngine:
             self._config_cache["batch_size"] = int(batch_size) if batch_size.isdigit() else 32
             self._config_cache["include_course_knowledge"] = include_course.lower() == "true"
             
+            # 🔥 更新Prompt模板（如果数据库中有配置）
+            if prompt_with_history:
+                self._config_cache["prompt_system_with_history"] = prompt_with_history
+            if prompt_without_history:
+                self._config_cache["prompt_system_without_history"] = prompt_without_history
+            if prompt_fallback:
+                self._config_cache["prompt_fallback"] = prompt_fallback
+            
             logger.info(f"📦 RAG配置已加载: top_k={self._config_cache['top_k']}, threshold={self._config_cache['similarity_threshold']}, include_course={self._config_cache['include_course_knowledge']}")
+            logger.info(f"📝 Prompt模板已加载: {len(prompt_with_history or '')}字符（有历史）, {len(prompt_without_history or '')}字符（无历史）")
             db.close()
         except Exception as e:
             logger.warning(f"⚠️ 从数据库加载RAG配置失败，使用默认值: {str(e)}")
@@ -217,6 +255,9 @@ class RAGEngine:
     async def answer(self, query: str, user_id: int, kb_type: str = "private", history: list = None, include_course: bool = None) -> str:
         """
         RAG问答：支持公共/私有切换 + 空库兜底 + 对话历史 + 动态配置 + 统一知识库
+        
+        🔥 论文4.2.2节实现：Prompt模板从system_config表动态读取
+        
         :param query: 用户问题
         :param user_id: 用户ID
         :param kb_type: 知识库类型
@@ -224,10 +265,15 @@ class RAGEngine:
         :param include_course: 是否包含课程知识点（None时使用配置）
         :return: 回答
         """
-        # 🔥 加载配置
+        # 🔥 加载配置（包括Prompt模板）
         self._load_config_from_db()
         top_k = self._config_cache["top_k"]
         max_context = self._config_cache["max_context_length"]
+        
+        # 🔥 获取Prompt模板
+        prompt_with_history = self._config_cache["prompt_system_with_history"]
+        prompt_without_history = self._config_cache["prompt_system_without_history"]
+        prompt_fallback = self._config_cache["prompt_fallback"]
         
         # 1. 检索
         docs = self.search(query, user_id, kb_type, top_k=top_k, include_course=include_course)
@@ -239,19 +285,11 @@ class RAGEngine:
         if len(context_text) > max_context:
             context_text = context_text[:max_context] + "...\n(内容过长，已截断)"
 
-        # 3. 🔥 构建包含历史对话的提示词
+        # 3. 🔥 构建包含历史对话的提示词（使用动态模板）
         if history and len(history) > 0:
             # 有历史对话的情况
-            system_prompt = f"""
-你是专业学习助手，基于知识点和对话历史回答问题，不编造。
-参考知识点：
-{context_text if context_text else '（无相关知识点）'}
-
-规则：
-1. 参考之前的对话历史，保持对话连贯性
-2. 如果有知识点，基于知识点回答；如果没有，直接回答
-3. 分点作答、专业清晰
-"""
+            system_prompt = prompt_with_history.format(context_text=context_text if context_text else "（无相关知识点）")
+            
             # 🔥 将历史对话转换为字符串格式
             history_text = "\n".join([
                 f"{'用户' if item['role'] == 'user' else '助手'}：{item['content']}"
@@ -271,15 +309,10 @@ class RAGEngine:
                 logger.warning(f"{kb_type}知识库为空，使用纯大模型兜底")
                 return await llm.chat(
                     user_prompt=query,
-                    system_prompt="你是专业学习助手，直接回答用户问题"
+                    system_prompt=prompt_fallback
                 )
 
-            system_prompt = f"""
-你是专业学习助手，基于知识点回答问题，不编造。
-参考知识点：
-{context_text}
-规则：分点作答、专业清晰
-"""
+            system_prompt = prompt_without_history.format(context_text=context_text)
             full_user_prompt = query
 
         # 4. 生成回答

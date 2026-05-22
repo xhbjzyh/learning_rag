@@ -9,7 +9,7 @@ from collections import defaultdict
 
 from models.db_models import (
     Course, CourseTag, CourseTagRel, CourseCategory,
-    CourseSimilarity, KnowledgePoint, CourseResource
+    CourseSimilarity, KnowledgePoint, CourseResource, UserCourseBehavior
 )
 from utils.logger import logger
 
@@ -180,10 +180,8 @@ class ContentBasedRecommender:
 
         # 2. 获取用户已学习的课程
         user_courses = set(
-            row[0] for row in self.db.query(CourseSimilarity.course_id1).join(
-                Course, Course.id == CourseSimilarity.course_id1
-            ).filter(
-                CourseSimilarity.course_id1 == course_id
+            row[0] for row in self.db.query(UserCourseBehavior.course_id).filter(
+                UserCourseBehavior.user_id == user_id
             ).all()
         )
 
@@ -208,6 +206,8 @@ class ContentBasedRecommender:
                 recommendations.append({
                     'course_id': other_course_id,
                     'course_title': course.title,
+                    'cover_url': course.cover_url,
+                    'difficulty': course.difficulty,
                     'similarity': sim.similarity,
                     'reason': f'与您正在学习的课程内容相似',
                     'recommend_type': 'content_based'
@@ -259,8 +259,8 @@ class ContentBasedRecommender:
 
         # 4. 排除已学习的课程
         user_courses = set(
-            row[0] for row in self.db.query(Course.id).join(
-                Course, Course.id == Course.id
+            row[0] for row in self.db.query(UserCourseBehavior.course_id).filter(
+                UserCourseBehavior.user_id == user_id
             ).all()
         )
 
@@ -270,6 +270,8 @@ class ContentBasedRecommender:
                 recommendations.append({
                     'course_id': course.id,
                     'course_title': course.title,
+                    'cover_url': course.cover_url,
+                    'difficulty': course.difficulty,
                     'score': 0.7,
                     'reason': f'根据您的学习兴趣推荐',
                     'recommend_type': 'profile_based'
@@ -292,6 +294,8 @@ class ContentBasedRecommender:
             {
                 'course_id': course.id,
                 'course_title': course.title,
+                'cover_url': course.cover_url,
+                'difficulty': course.difficulty,
                 'score': 0.5,
                 'reason': '热门课程推荐',
                 'recommend_type': 'popular'

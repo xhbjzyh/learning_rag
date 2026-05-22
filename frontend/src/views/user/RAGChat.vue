@@ -101,7 +101,7 @@
             @click="goToCourse(rec.course_id)"
           >
             <div class="item-rank">{{ index + 1 }}</div>
-            <img :src="rec.cover_url || defaultCover" class="course-cover" />
+            <img :src="getFullImageUrl(rec.cover_url)" class="course-cover" />
             <div class="course-info">
               <h4>{{ rec.course_title }}</h4>
               <p class="reason" v-if="rec.reason">
@@ -280,6 +280,16 @@ const recommendations = ref([])
 const learningStats = ref(null)
 const loadingRecommendations = ref(false)
 const defaultCover = 'https://via.placeholder.com/80x60?text=课程'
+
+// 🔥 新增：获取完整的图片URL
+const getFullImageUrl = (url) => {
+  if (!url) return defaultCover
+  // 如果已经是完整URL，直接返回
+  if (url.startsWith('http')) return url
+  // 否则拼接基础URL
+  const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+  return `${baseUrl}${url}`
+}
 
 const scrollToBottom = () => nextTick(() => {
   if (messagesRef.value) messagesRef.value.scrollTop = messagesRef.value.scrollHeight

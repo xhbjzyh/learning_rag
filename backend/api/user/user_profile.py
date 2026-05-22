@@ -14,6 +14,7 @@ from models.schemas import (
 )
 
 from utils.response import success_response
+from utils.logger import logger
 
 router = APIRouter(
     prefix="/profile",
@@ -332,44 +333,95 @@ def get_smart_recommendations(
     current_user=Depends(get_current_user)
 ):
     """
-    🔥 第五步核心功能：智能推荐（混合策略）
-    综合薄弱知识点、兴趣标签、学习路径、热门推荐
+    🔥 第五步核心功能：智能推荐（混合策略 - 论文第4.3节实现）
+    
+    综合推荐算法：
+    - 协同过滤（User-CF）：基于相似用户行为
+    - 内容推荐（Content-Based）：基于课程相似度
+    - 用户画像推荐：基于兴趣标签和学习偏好
+    
+    动态权重调整：
+    - 交互记录 < 10条：侧重内容推荐（α=0.2）
+    - 交互记录 10-50条：线性增长
+    - 交互记录 > 50条：侧重协同过滤（α=0.8）
     """
-    recommendations = enhanced_behavior_service.get_smart_recommendations(
-        db=db,
-        user_id=current_user.id,
-        limit=limit
-    )
-    return success_response(data=recommendations, msg="获取智能推荐成功")
+    try:
+        from core.hybrid_recommender import HybridRecommender
+        
+        recommender = HybridRecommender(db)
+        recommendations = recommender.get_personalized_recommendations(
+            user_id=current_user.id,
+            limit=limit
+        )
+        
+        logger.info(f"✅ 为用户 {current_user.id} 生成 {len(recommendations)} 个推荐")
+        return success_response(data=recommendations, msg="获取智能推荐成功")
+    except Exception as e:
+        logger.error(f"❌ 获取智能推荐失败: {str(e)}")
+        return success_response(code=500, data=[], msg=f"获取推荐失败: {str(e)}")
 
 
 @router.get("/recommendations-by-type", summary="按类型获取推荐")
 def get_recommendations_by_type(
-    recommend_type: str = Query(..., description="推荐类型：weak_point/interest_based/learning_path/hot"),
+    recommend_type: str = Query(..., description="推荐类型：collaborative_filtering/content_based/profile_based/hybrid"),
     limit: int = Query(5, ge=1, le=20, description="推荐数量"),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user)
 ):
     """
-    按推荐类型获取课程推荐
+    🔥 按推荐类型获取课程推荐（用于调试和对比）
+    
+    支持的推荐类型：
+    - collaborative_filtering: 协同过滤推荐（User-CF）
+    - content_based: 基于内容推荐（课程相似度）
+    - profile_based: 基于用户画像推荐
+    - hybrid: 混合推荐（默认）
     """
-    type_methods = {
-        "weak_point": enhanced_behavior_service._recommend_by_weak_points,
-        "interest_based": enhanced_behavior_service._recommend_by_interest_tags,
-        "learning_path": enhanced_behavior_service._recommend_by_learning_path,
-        "hot": enhanced_behavior_service._recommend_hot_courses
-    }
-    
-    if recommend_type not in type_methods:
-        return success_response(code=400, msg=f"不支持的推荐类型：{recommend_type}")
-    
-    recommendations = type_methods[recommend_type](
-        db=db,
-        user_id=current_user.id,
-        limit=limit
-    )
-    
-    return success_response(data=recommendations, msg=f"获取{recommend_type}推荐成功")
+    try:
+        from core.hybrid_recommender import HybridRecommender
+        from core.collaborative_filtering import CollaborativeFilteringRecommender
+        from core.content_based_recommender import ContentBasedRecommender
+        
+        if recommend_type == "hybrid":
+            # 混合推荐
+            recommender = HybridRecommender(db)
+            recommendations = recommender.get_personalized_recommendations(
+                user_id=current_user.id,
+                limit=limit
+            )
+        elif recommend_type == "collaborative_filtering":
+            # 纯协同过滤
+            cf_recommender = CollaborativeFilteringRecommender(db)
+            recommendations = cf_recommender.recommend_by_collaborative_filtering(
+                user_id=current_user.id,
+                limit=limit
+            )
+        elif recommend_type == "content_based":
+            # 纯内容推荐
+            cb_recommender = ContentBasedRecommender(db)
+            recent_course = None  # 可以传入特定课程ID
+            recommendations = cb_recommender.recommend_similar_courses(
+                course_id=recent_course,
+                user_id=current_user.id,
+                limit=limit
+            ) if recent_course else cb_recommender.recommend_by_user_profile(
+                user_id=current_user.id,
+                limit=limit
+            )
+        elif recommend_type == "profile_based":
+            # 纯用户画像推荐
+            cb_recommender = ContentBasedRecommender(db)
+            recommendations = cb_recommender.recommend_by_user_profile(
+                user_id=current_user.id,
+                limit=limit
+            )
+        else:
+            return success_response(code=400, msg=f"不支持的推荐类型：{recommend_type}")
+        
+        return success_response(data=recommendations, msg=f"获取{recommend_type}推荐成功")
+    except Exception as e:
+        logger.error(f"获取推荐失败: {str(e)}")
+        return success_response(code=500, data=[], msg=f"获取推荐失败: {str(e)}")
 
 
 # ==================== 知识点同步功能 ====================

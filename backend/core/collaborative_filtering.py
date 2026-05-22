@@ -1,5 +1,3 @@
-
-
 import numpy as np
 from typing import List, Dict, Tuple
 from sqlalchemy.orm import Session
@@ -219,8 +217,10 @@ class CollaborativeFilteringRecommender:
                 recommendations.append({
                     'course_id': course_id,
                     'course_title': course.title,
+                    'cover_url': course.cover_url,
+                    'difficulty': course.difficulty,
                     'score': round(score, 3),
-                    'reason': course_reasons[course_id][0],  # 取第一个理由
+                    'reason': course_reasons[course_id][0],
                     'recommend_type': 'collaborative_filtering'
                 })
 
@@ -239,6 +239,8 @@ class CollaborativeFilteringRecommender:
             {
                 'course_id': course.id,
                 'course_title': course.title,
+                'cover_url': course.cover_url,
+                'difficulty': course.difficulty,
                 'score': 0.5,
                 'reason': '热门课程推荐',
                 'recommend_type': 'popular'
