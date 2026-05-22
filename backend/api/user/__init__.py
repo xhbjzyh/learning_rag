@@ -13,6 +13,7 @@ from .personal_center import router as personal_center_router
 from .rag_chat import router as rag_chat_router
 from .user_course import router as user_course_router  # 🔥 新增：导入合并后的课程路由
 from .recommendation_v2 import router as recommendation_v2_router  # 🔥 第二阶段：推荐系统
+from .learning_path import router as learning_path_router  # 🔥 第三阶段：学习路径规划
 
 # 统一用户端根路由（去掉内部prefix，由main.py统一管理）
 user_router = APIRouter()
@@ -27,6 +28,7 @@ user_router.include_router(personal_center_router, tags=["用户-个人中心"])
 user_router.include_router(rag_chat_router, tags=["用户-AI智能问答"])
 user_router.include_router(user_course_router, tags=["用户-课程学习"])  # 🔥 注册合并后的课程路由
 user_router.include_router(recommendation_v2_router, tags=["用户-个性化推荐"])  # 🔥 第二阶段：推荐系统
+user_router.include_router(learning_path_router, tags=["用户-学习路径规划"])  # 🔥 第三阶段：学习路径规划
 
 # 只导出统一的user_router
 __all__ = ["user_router"]

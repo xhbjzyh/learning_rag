@@ -15,6 +15,10 @@ langchain-community==0.3.3
 unstructured[all-docs]==0.16.4
 zhipuai==2.1.0
 
+# 🔥 BM25检索
+rank-bm25==0.2.2
+jieba==0.42.1
+
 # Security & Utils
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4

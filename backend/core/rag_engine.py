@@ -42,6 +42,12 @@ class RAGEngine:
             "prompt_fallback": "你是专业学习助手，直接回答用户问题"
         }
         
+        # 🔥 BM25索引构建标志
+        self._bm25_index_built = {
+            'public': False,
+            'private': False
+        }
+        
         logger.info("✅ RAG引擎初始化完成（向量库将在首次使用时加载）")
 
     def _load_config_from_db(self):
@@ -148,7 +154,15 @@ class RAGEngine:
             )
 
     def search(self, query: str, user_id: int, kb_type: str = "private", top_k: int = None, include_course: bool = None) -> List[dict]:
-        """检索：支持缓存优化"""
+        """
+        🔥 混合检索：FAISS向量检索 + BM25关键词检索（论文第2.1.2节、2.2.2节）
+        
+        检索流程：
+        1. 并行执行FAISS向量检索（语义相似度）和BM25检索（关键词匹配）
+        2. 分别计算两种得分
+        3. 线性加权融合：Score_final = λ·Score_vector + (1-λ)·Score_bm25
+        4. 按最终得分排序，返回Top-K结果
+        """
         # 🔥 生成缓存key
         cache_key = f"rag:search:{user_id}:{kb_type}:{query[:50]}:{top_k}"
         
@@ -170,28 +184,197 @@ class RAGEngine:
         
         vs = self.get_vector_store(user_id, kb_type)
         
-        # 🔥 执行搜索
-        if kb_type == "public":
-            # 🔥 关键修复：公共知识库也使用FAISS向量库
-            results = vs.hybrid_search(query, top_k=top_k)
+        # ==================== 第一阶段：双路并行检索 ====================
+        
+        # 1. FAISS向量检索（语义相似度）
+        vector_results = []
+        try:
+            if kb_type == "public":
+                vector_results = vs.hybrid_search(query, top_k=top_k * 2)
+                
+                # 如果向量库为空，降级到数据库混合搜索
+                if not vector_results and vs.index.ntotal == 0:
+                    logger.warning("⚠️ 公共向量库为空，降级到数据库混合搜索")
+                    vector_results = self._hybrid_public_search(query, top_k * 2, include_course)
+            else:
+                vector_results = vs.hybrid_search(query, top_k=top_k * 2)
             
-            # 如果向量库为空，降级到数据库混合搜索
-            if not results and vs.index.ntotal == 0:
-                logger.warning("⚠️ 公共向量库为空，降级到数据库混合搜索")
-                results = self._hybrid_public_search(query, top_k, include_course)
-        else:
-            results = vs.hybrid_search(query, top_k=top_k)
+            logger.info(f"📊 FAISS向量检索: {len(vector_results)} 个结果")
+        except Exception as e:
+            logger.error(f"❌ FAISS向量检索失败: {e}")
+        
+        # 2. BM25关键词检索
+        bm25_results = []
+        try:
+            from core.bm25_retriever import bm25_retriever
+            
+            # 构建BM25索引（如果还没有）
+            if bm25_retriever.total_docs == 0:
+                logger.info("🔨 首次使用BM25，正在构建索引...")
+                self._build_bm25_index(kb_type, include_course)
+            
+            # 执行BM25检索
+            bm25_results = bm25_retriever.search(query, top_k=top_k * 2)
+            logger.info(f"📊 BM25关键词检索: {len(bm25_results)} 个结果")
+        except Exception as e:
+            logger.error(f"❌ BM25检索失败: {e}")
+        
+        # ==================== 第二阶段：加权融合 ====================
+        
+        # 混合权重（论文第2.2.2节）
+        lambda_weight = 0.7  # 向量检索权重
+        bm25_weight = 0.3    # BM25权重
+        
+        # 归一化并融合结果
+        fused_results = self._fuse_results(
+            vector_results, 
+            bm25_results, 
+            lambda_weight, 
+            bm25_weight,
+            top_k
+        )
         
         # 🔥 应用相似度阈值过滤
         threshold = self._config_cache["similarity_threshold"]
-        filtered_results = [r for r in results if r.get('score', 0) >= threshold]
+        filtered_results = [r for r in fused_results if r.get('score', 0) >= threshold]
         
         # 🔥 写入缓存（5分钟）
         cache_service.set(cache_key, filtered_results, ttl=300)
         
-        logger.info(f"🔍 检索结果: 原始{len(results)}条, 过滤后{len(filtered_results)}条")
+        logger.info(f"🔍 混合检索完成: FAISS={len(vector_results)}, BM25={len(bm25_results)}, 融合后={len(filtered_results)}条")
+        
         return filtered_results
     
+    def _build_bm25_index(self, kb_type: str, include_course: bool):
+        """
+        构建BM25索引（从数据库加载文档）
+        
+        Args:
+            kb_type: 知识库类型（public/private）
+            include_course: 是否包含课程知识点
+        """
+        from db.sqlite_conn import SessionLocal
+        from models.db_models import KnowledgePoint
+        from core.bm25_retriever import bm25_retriever
+        
+        db = SessionLocal()
+        
+        try:
+            # 构建查询条件
+            filters = [KnowledgePoint.is_published == True]
+            
+            if kb_type == "public" and not include_course:
+                filters.append(KnowledgePoint.source_type == "public")
+            
+            # 获取所有知识点
+            points = db.query(KnowledgePoint).filter(*filters).all()
+            
+            # 准备文档数据
+            documents = [
+                {'id': point.id, 'content': f"{point.title} {point.content}"}
+                for point in points
+            ]
+            
+            # 构建BM25索引
+            bm25_retriever.rebuild_index(documents)
+            
+            logger.info(f"✅ BM25索引构建完成: {len(documents)} 个文档")
+            
+        except Exception as e:
+            logger.error(f"❌ BM25索引构建失败: {e}")
+        finally:
+            db.close()
+    
+    def _fuse_results(
+        self, 
+        vector_results: List[Dict], 
+        bm25_results: List[Dict],
+        lambda_weight: float,
+        bm25_weight: float,
+        top_k: int
+    ) -> List[Dict]:
+        """
+        融合向量检索和BM25检索结果（论文第2.2.2节）
+        
+        公式：Score_final = λ·Score_vector + (1-λ)·Score_bm25
+        
+        Args:
+            vector_results: 向量检索结果
+            bm25_results: BM25检索结果
+            lambda_weight: 向量检索权重
+            bm25_weight: BM25权重
+            top_k: 返回结果数量
+            
+        Returns:
+            融合后的结果列表
+        """
+        # 创建文档ID到结果的映射
+        doc_scores = {}
+        
+        # 处理向量检索结果
+        for result in vector_results:
+            doc_id = result.get('id') or result.get('point_id')
+            if not doc_id:
+                continue
+            
+            # 归一化向量得分到0-1
+            vector_score = result.get('similarity', result.get('score', 0))
+            
+            doc_scores[doc_id] = {
+                'doc_id': doc_id,
+                'title': result.get('title', ''),
+                'content': result.get('content', ''),
+                'vector_score': vector_score,
+                'bm25_score': 0,
+                'source_type': result.get('source_type', 'vector')
+            }
+        
+        # 处理BM25检索结果
+        for result in bm25_results:
+            doc_id = result.get('doc_id')
+            if not doc_id:
+                continue
+            
+            # 如果文档已存在，更新BM25得分
+            if doc_id in doc_scores:
+                doc_scores[doc_id]['bm25_score'] = result['bm25_score']
+            else:
+                # 新文档（仅BM25召回）
+                doc_scores[doc_id] = {
+                    'doc_id': doc_id,
+                    'title': '',
+                    'content': result.get('content', ''),
+                    'vector_score': 0,
+                    'bm25_score': result['bm25_score'],
+                    'source_type': 'bm25'
+                }
+        
+        # 计算融合得分
+        fused_results = []
+        for doc_id, scores in doc_scores.items():
+            # 归一化BM25得分（简单归一化：除以最大得分）
+            max_bm25 = max([r['bm25_score'] for r in bm25_results]) if bm25_results else 1.0
+            normalized_bm25 = scores['bm25_score'] / max_bm25 if max_bm25 > 0 else 0
+            
+            # 融合公式
+            final_score = lambda_weight * scores['vector_score'] + bm25_weight * normalized_bm25
+            
+            fused_results.append({
+                'id': doc_id,
+                'title': scores['title'],
+                'content': scores['content'],
+                'score': final_score,
+                'vector_score': scores['vector_score'],
+                'bm25_score': normalized_bm25,
+                'source_type': scores['source_type']
+            })
+        
+        # 按融合得分排序
+        fused_results.sort(key=lambda x: x['score'], reverse=True)
+        
+        # 返回top_k
+        return fused_results[:top_k]
+
     def _hybrid_public_search(self, query: str, top_k: int, include_course: bool) -> List[dict]:
         """
         🔥 混合搜索公共知识库（公共 + 课程知识点）- 降级方案
